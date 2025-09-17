@@ -1,9 +1,8 @@
-/////////////////////////////////////////////////////////////////////////////////////////////////
-//COCOT - Simple Code Editor for C Language
-//save as .c in HOME folder
-//ctlr+s, save, ctrl+o open, ctrl+n, new
 ////////////////////////////////////////////////////////////////////////////////////////////////
-
+//COCOT - Simple Code Editor for C Language with Syntax Highlighting, 17.9.2025, Karel Resl
+//ctlr+s, save, ctrl+o open, ctrl+n, new
+//Compilation for Linux: gcc cocot.c -o cocot -lncurses
+////////////////////////////////////////////////////////////////////////////////////////////////
 
 #define _GNU_SOURCE
 #include <ncurses.h>
@@ -28,6 +27,63 @@
 
 char current_filename[512] = "";
 int modified = 0;  // Sledování změn v souboru
+
+// Klíčová slova jazyka C
+const char *c_keywords[] = {
+    "auto", "break", "case", "char", "const", "continue", "default", "do", 
+    "double", "else", "enum", "extern", "float", "for", "goto", "if", 
+    "int", "long", "register", "return", "short", "signed", "sizeof", "static", 
+    "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while"
+};
+const int num_keywords = 32;
+
+// Preprocesorové direktivy
+const char *preprocessor_directives[] = {
+    "#include", "#define", "#ifdef", "#ifndef", "#if", "#else", "#elif", "#endif", 
+    "#undef", "#pragma", "#error", "#warning", "#line"
+};
+const int num_directives = 13;
+
+// Funkce pro kontrolu, zda je slovo klíčové
+int is_keyword(const char *word, int length) {
+    for (int i = 0; i < num_keywords; i++) {
+        if (strlen(c_keywords[i]) == length && 
+            strncmp(word, c_keywords[i], length) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Funkce pro kontrolu preprocesorové direktivy
+int is_directive(const char *line_start) {
+    // Přeskočení počátečních mezer
+    while (*line_start == ' ' || *line_start == '\t') {
+        line_start++;
+    }
+    
+    // Kontrola, zda řádek začíná '#'
+    if (*line_start != '#') {
+        return 0;
+    }
+    
+    // Získání direktivy (od '#' do prvního mezerníku nebo konce řádku)
+    const char *directive_start = line_start + 1;
+    const char *directive_end = directive_start;
+    while (*directive_end && !isspace(*directive_end) && *directive_end != '\n') {
+        directive_end++;
+    }
+    
+    int directive_length = directive_end - directive_start;
+    
+    for (int i = 0; i < num_directives; i++) {
+        if (strlen(preprocessor_directives[i] + 1) == directive_length && 
+            strncmp(directive_start, preprocessor_directives[i] + 1, directive_length) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 int count_words(const char *text) {
     if (!text || !*text) return 0;
@@ -176,10 +232,13 @@ int main() {
     // Barevné schéma
     if (has_colors()) {
         start_color();
-        init_pair(1, COLOR_GREEN, COLOR_BLACK);  // hlavní text
-        init_pair(2, COLOR_CYAN, COLOR_BLACK);   // čísla řádků
-        init_pair(3, COLOR_YELLOW, COLOR_BLACK); // stav/hlavičky
-        init_pair(4, COLOR_WHITE, COLOR_BLACK);  // normální text
+        init_pair(1, COLOR_GREEN, COLOR_BLACK);    // hlavní text
+        init_pair(2, COLOR_CYAN, COLOR_BLACK);     // čísla řádků
+        init_pair(3, COLOR_YELLOW, COLOR_BLACK);   // stav/hlavičky
+        init_pair(4, COLOR_WHITE, COLOR_BLACK);    // normální text
+        init_pair(5, COLOR_MAGENTA, COLOR_BLACK);  // klíčová slova
+        init_pair(6, COLOR_BLUE, COLOR_BLACK);     // preprocesorové direktivy
+        init_pair(7, COLOR_RED, COLOR_BLACK);      // čísla
         bkgd(COLOR_PAIR(4));
     }
     
@@ -237,18 +296,138 @@ int main() {
             
             // Obsah řádku
             int x = LINE_NUM_WIDTH;
+            int line_start = text_pos;
+            int in_comment = 0;
+            int in_string = 0;
+            int in_char = 0;
+            char string_char = 0;
+            
             while (text_pos < len && text[text_pos] != '\n' && x < COLS - 1) {
+                // Zpracování znaků
                 if (text[text_pos] == '\t') {
                     int spaces = TAB_SIZE - ((x - LINE_NUM_WIDTH) % TAB_SIZE);
                     for (int i = 0; i < spaces && x < COLS - 1; i++) {
                         mvaddch(y, x++, ' ');
                     }
+                    text_pos++;
                 } else {
-                    attron(COLOR_PAIR(1));
-                    mvaddch(y, x++, text[text_pos]);
-                    attroff(COLOR_PAIR(1));
+                    // Kontrola řetězců a znaků
+                    if (!in_comment && !in_string && !in_char) {
+                        if (text[text_pos] == '"') {
+                            in_string = 1;
+                            string_char = '"';
+                            attron(COLOR_PAIR(7)); // Červená pro řetězce
+                        } else if (text[text_pos] == '\'') {
+                            in_char = 1;
+                            string_char = '\'';
+                            attron(COLOR_PAIR(7)); // Červená pro znaky
+                        } else if (text_pos + 1 < len && text[text_pos] == '/' && text[text_pos + 1] == '*') {
+                            in_comment = 1;
+                            attron(COLOR_PAIR(2)); // Cyan pro komentáře
+                        } else if (text_pos + 1 < len && text[text_pos] == '/' && text[text_pos + 1] == '/') {
+                            // Řádkový komentář - zbytek řádku bude cyan
+                            attron(COLOR_PAIR(2));
+                            while (text_pos < len && text[text_pos] != '\n' && x < COLS - 1) {
+                                if (text[text_pos] == '\t') {
+                                    int spaces = TAB_SIZE - ((x - LINE_NUM_WIDTH) % TAB_SIZE);
+                                    for (int i = 0; i < spaces && x < COLS - 1; i++) {
+                                        mvaddch(y, x++, ' ');
+                                    }
+                                } else {
+                                    mvaddch(y, x++, text[text_pos]);
+                                }
+                                text_pos++;
+                            }
+                            attroff(COLOR_PAIR(2));
+                            continue;
+                        } else if (is_directive(&text[line_start])) {
+                            // Preprocesorová direktiva
+                            attron(COLOR_PAIR(6)); // Modrá pro direktivy
+                            while (text_pos < len && text[text_pos] != '\n' && x < COLS - 1) {
+                                if (text[text_pos] == '\t') {
+                                    int spaces = TAB_SIZE - ((x - LINE_NUM_WIDTH) % TAB_SIZE);
+                                    for (int i = 0; i < spaces && x < COLS - 1; i++) {
+                                        mvaddch(y, x++, ' ');
+                                    }
+                                } else {
+                                    mvaddch(y, x++, text[text_pos]);
+                                }
+                                text_pos++;
+                            }
+                            attroff(COLOR_PAIR(6));
+                            continue;
+                        } else if (isalpha(text[text_pos]) || text[text_pos] == '_') {
+                            // Možné klíčové slovo
+                            int word_start = text_pos;
+                            while (text_pos < len && (isalnum(text[text_pos]) || text[text_pos] == '_')) {
+                                text_pos++;
+                            }
+                            int word_length = text_pos - word_start;
+                            
+                            if (is_keyword(&text[word_start], word_length)) {
+                                // Klíčové slovo
+                                attron(COLOR_PAIR(5)); // Magenta pro klíčová slova
+                                for (int i = word_start; i < text_pos; i++) {
+                                    if (x < COLS - 1) {
+                                        mvaddch(y, x++, text[i]);
+                                    }
+                                }
+                                attroff(COLOR_PAIR(5));
+                            } else {
+                                // Běžný identifikátor
+                                attron(COLOR_PAIR(1)); // Zelená pro běžný text
+                                for (int i = word_start; i < text_pos; i++) {
+                                    if (x < COLS - 1) {
+                                        mvaddch(y, x++, text[i]);
+                                    }
+                                }
+                                attroff(COLOR_PAIR(1));
+                            }
+                            continue;
+                        } else if (isdigit(text[text_pos])) {
+                            // Číslo
+                            attron(COLOR_PAIR(7)); // Červená pro čísla
+                            mvaddch(y, x++, text[text_pos]);
+                            attroff(COLOR_PAIR(7));
+                            text_pos++;
+                            continue;
+                        } else {
+                            // Obyčejný znak
+                            attron(COLOR_PAIR(1)); // Zelená pro běžný text
+                            mvaddch(y, x++, text[text_pos]);
+                            attroff(COLOR_PAIR(1));
+                            text_pos++;
+                            continue;
+                        }
+                    } else if (in_comment) {
+                        // Uvnitř blokového komentáře
+                        if (text_pos + 1 < len && text[text_pos] == '*' && text[text_pos + 1] == '/') {
+                            mvaddch(y, x++, text[text_pos++]);
+                            mvaddch(y, x++, text[text_pos]);
+                            in_comment = 0;
+                            attroff(COLOR_PAIR(2));
+                        } else {
+                            mvaddch(y, x++, text[text_pos]);
+                        }
+                    } else if (in_string || in_char) {
+                        // Uvnitř řetězce nebo znaku
+                        if (text[text_pos] == '\\' && text_pos + 1 < len) {
+                            // Escape sekvence
+                            mvaddch(y, x++, text[text_pos++]);
+                            mvaddch(y, x++, text[text_pos]);
+                        } else if (text[text_pos] == string_char) {
+                            // Konec řetězce/znaku
+                            mvaddch(y, x++, text[text_pos]);
+                            in_string = 0;
+                            in_char = 0;
+                            attroff(COLOR_PAIR(7));
+                        } else {
+                            mvaddch(y, x++, text[text_pos]);
+                        }
+                    }
+                    
+                    text_pos++;
                 }
-                text_pos++;
             }
             
             if (text_pos < len && text[text_pos] == '\n') {
