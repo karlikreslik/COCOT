@@ -1,0 +1,514 @@
+/////////////////////////////////////////////////////////////////////////////////////////////////
+//COCOT - Simple Code Editor for C Language
+//save as .c in HOME folder
+//ctlr+s, save, ctrl+o open, ctrl+n, new
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+#define _GNU_SOURCE
+#include <ncurses.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <pwd.h>
+
+#define MAX_TEXT 50000
+#define STATUS_ATTR A_REVERSE
+#define TAB_SIZE 4
+#define LINE_NUM_WIDTH 6
+
+// Přímé definice ASCII hodnot pro Ctrl klávesy
+#define CTRL_S 19
+#define CTRL_N 14
+#define CTRL_O 15
+#define CTRL_X 24
+#define CTRL_Q 17
+
+char current_filename[512] = "";
+int modified = 0;  // Sledování změn v souboru
+
+int count_words(const char *text) {
+    if (!text || !*text) return 0;
+    
+    int count = 0;
+    int in_word = 0;
+    
+    for (int i = 0; text[i]; i++) {
+        if (isspace(text[i])) {
+            in_word = 0;
+        } else if (!in_word) {
+            in_word = 1;
+            count++;
+        }
+    }
+    return count;
+}
+
+int count_lines(const char *text, int len) {
+    if (len == 0) return 1;
+    int lines = 1;
+    for (int i = 0; i < len; i++) {
+        if (text[i] == '\n') lines++;
+    }
+    return lines;
+}
+
+int save_file(const char *filename, const char *text) {
+    FILE *f = fopen(filename, "w");
+    if (!f) return 0;
+    
+    fprintf(f, "%s", text);
+    fclose(f);
+    return 1;
+}
+
+int load_file(const char *filename, char *text, int max_size) {
+    FILE *f = fopen(filename, "r");
+    if (!f) return 0;
+    
+    int len = fread(text, 1, max_size - 1, f);
+    text[len] = '\0';
+    fclose(f);
+    return len;
+}
+
+void show_message(const char *message, int duration_ms) {
+    attron(STATUS_ATTR);
+    mvprintw(LINES - 1, 0, "%s", message);
+    clrtoeol();
+    attroff(STATUS_ATTR);
+    refresh();
+    if (duration_ms > 0) {
+        napms(duration_ms);
+    }
+}
+
+int get_filename_input(char *filename, int max_len, const char *prompt) {
+    // Dočasné povolení echo a kurzoru
+    echo();
+    curs_set(1);
+    
+    // Vymazání obrazovky a zobrazení dialogu
+    clear();
+    refresh();
+    
+    // Získání domovského adresáře
+    char *home_dir = getenv("HOME");
+    if (!home_dir) {
+        struct passwd *pw = getpwuid(getuid());
+        home_dir = pw ? pw->pw_dir : "/tmp";
+    }
+    
+    // Zobrazení dialogu
+    attron(A_BOLD | COLOR_PAIR(3));
+    mvprintw(LINES/2 - 3, 5, "=== %s ===", prompt);
+    attroff(A_BOLD | COLOR_PAIR(3));
+    
+    mvprintw(LINES/2 - 1, 5, "Home directory: %s", home_dir);
+    
+    attron(A_BOLD);
+    mvprintw(LINES/2 + 1, 5, "Enter filename (without .c extension): ");
+    attroff(A_BOLD);
+    refresh();
+    
+    // Získání vstupu
+    char basename[200] = "";
+    if (getnstr(basename, sizeof(basename) - 1) == ERR) {
+        noecho();
+        curs_set(1);
+        return 0;
+    }
+    
+    // Vytvoření celé cesty
+    if (strlen(basename) > 0) {
+        // Odstranění přípony .c, pokud ji uživatel přidal
+        char *dot = strrchr(basename, '.');
+        if (dot && strcmp(dot, ".c") == 0) {
+            *dot = '\0';
+        }
+        snprintf(filename, max_len, "%s/%s.c", home_dir, basename);
+    } else {
+        snprintf(filename, max_len, "%s/untitled.c", home_dir);
+    }
+    
+    // Zobrazení potvrzení pro operace ukládání
+    if (strstr(prompt, "SAVE")) {
+        mvprintw(LINES/2 + 3, 5, "File will be saved as: %s", filename);
+        attron(A_BOLD | COLOR_PAIR(3));
+        mvprintw(LINES/2 + 5, 5, "Continue? (y/n): ");
+        attroff(A_BOLD | COLOR_PAIR(3));
+        refresh();
+        
+        int confirm = getch();
+        if (confirm != 'y' && confirm != 'Y') {
+            noecho();
+            curs_set(1);
+            return 0;
+        }
+    }
+    
+    noecho();
+    curs_set(1);
+    return 1;
+}
+
+int main() {
+    char text[MAX_TEXT] = "";
+    int len = 0;
+    int pos = 0;
+    int ch;
+    int running = 1;
+    int scroll_offset = 0;
+    
+    // Inicializace ncurses
+    initscr();
+    raw();  // Použijeme raw() místo cbreak() pro lepší zacházení s Ctrl klávesami
+    noecho();
+    keypad(stdscr, TRUE);
+    curs_set(1);
+    
+    // Povolení speciálních kláves
+    nonl();
+    intrflush(stdscr, FALSE);
+    
+    // Barevné schéma
+    if (has_colors()) {
+        start_color();
+        init_pair(1, COLOR_GREEN, COLOR_BLACK);  // hlavní text
+        init_pair(2, COLOR_CYAN, COLOR_BLACK);   // čísla řádků
+        init_pair(3, COLOR_YELLOW, COLOR_BLACK); // stav/hlavičky
+        init_pair(4, COLOR_WHITE, COLOR_BLACK);  // normální text
+        bkgd(COLOR_PAIR(4));
+    }
+    
+    clear();
+    refresh();
+    
+    // Hlavní editační smyčka
+    while (running) {
+        erase();
+        
+        // Zobrazení hlavičky
+        attron(A_BOLD | COLOR_PAIR(3));
+        if (strlen(current_filename) > 0) {
+            char *basename = strrchr(current_filename, '/');
+            basename = basename ? basename + 1 : current_filename;
+            mvprintw(0, 0, "C Editor - %s%s", basename, modified ? " *" : "");
+        } else {
+            mvprintw(0, 0, "C Editor - New File%s", modified ? " *" : "");
+        }
+        clrtoeol();
+        attroff(A_BOLD | COLOR_PAIR(3));
+        
+        // Výpočet aktuálního řádku kurzoru
+        int current_line = 1;
+        for (int i = 0; i < pos; i++) {
+            if (text[i] == '\n') current_line++;
+        }
+        
+        // Automatické posouvání
+        int visible_lines = LINES - 3;
+        if (current_line < scroll_offset + 1) {
+            scroll_offset = current_line - 1;
+        } else if (current_line > scroll_offset + visible_lines) {
+            scroll_offset = current_line - visible_lines;
+        }
+        if (scroll_offset < 0) scroll_offset = 0;
+        
+        // Zobrazení textu s čísly řádků
+        int display_line = 1;
+        int y = 1;
+        int text_pos = 0;
+        
+        // Přeskočení řádků před scroll_offset
+        while (text_pos < len && display_line <= scroll_offset) {
+            if (text[text_pos] == '\n') display_line++;
+            text_pos++;
+        }
+        
+        // Zobrazení viditelných řádků
+        while (y < LINES - 1 && text_pos <= len && display_line <= scroll_offset + visible_lines) {
+            // Číslo řádku
+            attron(COLOR_PAIR(2));
+            mvprintw(y, 0, "%5d ", display_line);
+            attroff(COLOR_PAIR(2));
+            
+            // Obsah řádku
+            int x = LINE_NUM_WIDTH;
+            while (text_pos < len && text[text_pos] != '\n' && x < COLS - 1) {
+                if (text[text_pos] == '\t') {
+                    int spaces = TAB_SIZE - ((x - LINE_NUM_WIDTH) % TAB_SIZE);
+                    for (int i = 0; i < spaces && x < COLS - 1; i++) {
+                        mvaddch(y, x++, ' ');
+                    }
+                } else {
+                    attron(COLOR_PAIR(1));
+                    mvaddch(y, x++, text[text_pos]);
+                    attroff(COLOR_PAIR(1));
+                }
+                text_pos++;
+            }
+            
+            if (text_pos < len && text[text_pos] == '\n') {
+                text_pos++;
+            }
+            
+            display_line++;
+            y++;
+        }
+        
+        // Výpočet pozice kurzoru
+        int cursor_line = 1;
+        int cursor_col = 0;
+        for (int i = 0; i < pos; i++) {
+            if (text[i] == '\n') {
+                cursor_line++;
+                cursor_col = 0;
+            } else if (text[i] == '\t') {
+                cursor_col += TAB_SIZE - (cursor_col % TAB_SIZE);
+            } else {
+                cursor_col++;
+            }
+        }
+        
+        // Stavový řádek
+        attron(STATUS_ATTR);
+        mvprintw(LINES - 1, 0, "Line:%d/%d Col:%d Words:%d | ^S:Save ^N:New ^O:Open ^X:Exit", 
+                 cursor_line, count_lines(text, len), cursor_col + 1, count_words(text));
+        clrtoeol();
+        attroff(STATUS_ATTR);
+        
+        // Pozicování kurzoru na obrazovce
+        int screen_y = cursor_line - scroll_offset;
+        int screen_x = LINE_NUM_WIDTH + cursor_col;
+        
+        if (screen_y >= 1 && screen_y < LINES - 1 && screen_x >= LINE_NUM_WIDTH && screen_x < COLS) {
+            move(screen_y, screen_x);
+        }
+        refresh();
+        
+        // Získání vstupu
+        ch = getch();
+        
+        // Zpracování vstupu
+        switch (ch) {
+            case CTRL_S: // Uložit
+                {
+                    char temp_filename[512];
+                    if (strlen(current_filename) == 0) {
+                        if (get_filename_input(temp_filename, sizeof(temp_filename), "SAVE FILE")) {
+                            strcpy(current_filename, temp_filename);
+                        } else {
+                            show_message("Save cancelled", 1000);
+                            break;
+                        }
+                    } else {
+                        strcpy(temp_filename, current_filename);
+                    }
+                    
+                    if (save_file(temp_filename, text)) {
+                        modified = 0;
+                        char msg[600];
+                        snprintf(msg, sizeof(msg), "Saved: %s", temp_filename);
+                        show_message(msg, 1500);
+                    } else {
+                        show_message("ERROR: Cannot save file!", 2000);
+                    }
+                }
+                break;
+                
+            case CTRL_N: // Nový soubor
+                if (modified) {
+                    show_message("File modified! Save first (^S) or press ^N again to create new file without saving", 0);
+                    refresh();
+                    int confirm = getch();
+                    if (confirm != CTRL_N) break;
+                }
+                text[0] = '\0';
+                len = 0;
+                pos = 0;
+                scroll_offset = 0;
+                current_filename[0] = '\0';
+                modified = 0;
+                show_message("New file created", 1000);
+                break;
+                
+            case CTRL_O: // Otevřít soubor
+                {
+                    if (modified) {
+                        show_message("File modified! Save first (^S) or press ^O again to open without saving", 0);
+                        refresh();
+                        int confirm = getch();
+                        if (confirm != CTRL_O) break;
+                    }
+                    
+                    char filename[512];
+                    if (get_filename_input(filename, sizeof(filename), "OPEN FILE")) {
+                        int new_len = load_file(filename, text, MAX_TEXT);
+                        if (new_len >= 0) {
+                            len = new_len;
+                            pos = 0;
+                            scroll_offset = 0;
+                            strcpy(current_filename, filename);
+                            modified = 0;
+                            char msg[600];
+                            snprintf(msg, sizeof(msg), "Loaded: %s", filename);
+                            show_message(msg, 1500);
+                        } else {
+                            // Vytvoření nového souboru
+                            len = 0;
+                            pos = 0;
+                            scroll_offset = 0;
+                            strcpy(current_filename, filename);
+                            modified = 0;
+                            char msg[600];
+                            snprintf(msg, sizeof(msg), "New file: %s", filename);
+                            show_message(msg, 1500);
+                        }
+                    }
+                }
+                break;
+                
+            case CTRL_X: // Ukončit
+            case CTRL_Q:
+                if (modified) {
+                    show_message("File modified! Save first (^S) or press ^X again to quit without saving", 0);
+                    refresh();
+                    int confirm = getch();
+                    if (confirm == CTRL_X || confirm == CTRL_Q) {
+                        running = 0;
+                    }
+                } else {
+                    running = 0;
+                }
+                break;
+                
+            case KEY_BACKSPACE:
+            case 127:
+            case 8:
+                if (pos > 0) {
+                    memmove(&text[pos-1], &text[pos], len - pos + 1);
+                    pos--;
+                    len--;
+                    modified = 1;
+                }
+                break;
+                
+            case KEY_DC: // Delete klávesa
+                if (pos < len) {
+                    memmove(&text[pos], &text[pos+1], len - pos);
+                    len--;
+                    modified = 1;
+                }
+                break;
+                
+            case '\t':
+                for (int i = 0; i < TAB_SIZE && len < MAX_TEXT - 1; i++) {
+                    memmove(&text[pos+1], &text[pos], len - pos + 1);
+                    text[pos] = ' ';
+                    pos++;
+                    len++;
+                }
+                modified = 1;
+                break;
+                
+            case '\n':
+            case '\r':
+            case KEY_ENTER:
+                if (len < MAX_TEXT - 1) {
+                    memmove(&text[pos+1], &text[pos], len - pos + 1);
+                    text[pos] = '\n';
+                    pos++;
+                    len++;
+                    modified = 1;
+                }
+                break;
+                
+            case KEY_LEFT:
+                if (pos > 0) pos--;
+                break;
+                
+            case KEY_RIGHT:
+                if (pos < len) pos++;
+                break;
+                
+            case KEY_UP:
+                {
+                    int line_start = pos;
+                    while (line_start > 0 && text[line_start-1] != '\n') line_start--;
+                    if (line_start > 0) {
+                        int prev_line_start = line_start - 1;
+                        while (prev_line_start > 0 && text[prev_line_start-1] != '\n') prev_line_start--;
+                        int offset = pos - line_start;
+                        int prev_line_end = line_start - 1;
+                        int prev_line_len = prev_line_end - prev_line_start;
+                        pos = prev_line_start + (offset > prev_line_len ? prev_line_len : offset);
+                    }
+                }
+                break;
+                
+            case KEY_DOWN:
+                {
+                    int line_start = pos;
+                    while (line_start > 0 && text[line_start-1] != '\n') line_start--;
+                    int line_end = pos;
+                    while (line_end < len && text[line_end] != '\n') line_end++;
+                    if (line_end < len) {
+                        int offset = pos - line_start;
+                        int next_line_start = line_end + 1;
+                        int next_line_end = next_line_start;
+                        while (next_line_end < len && text[next_line_end] != '\n') next_line_end++;
+                        int next_line_len = next_line_end - next_line_start;
+                        pos = next_line_start + (offset > next_line_len ? next_line_len : offset);
+                    }
+                }
+                break;
+                
+            case KEY_HOME:
+                while (pos > 0 && text[pos-1] != '\n') pos--;
+                break;
+                
+            case KEY_END:
+                while (pos < len && text[pos] != '\n') pos++;
+                break;
+                
+            case KEY_PPAGE: // Page Up
+                scroll_offset -= visible_lines;
+                if (scroll_offset < 0) scroll_offset = 0;
+                pos = 0;
+                for (int i = 0; i < scroll_offset; i++) {
+                    while (pos < len && text[pos] != '\n') pos++;
+                    if (pos < len) pos++;
+                }
+                break;
+                
+            case KEY_NPAGE: // Page Down
+                scroll_offset += visible_lines;
+                int max_scroll = count_lines(text, len) - visible_lines;
+                if (scroll_offset > max_scroll) scroll_offset = max_scroll;
+                if (scroll_offset < 0) scroll_offset = 0;
+                pos = 0;
+                for (int i = 0; i < scroll_offset; i++) {
+                    while (pos < len && text[pos] != '\n') pos++;
+                    if (pos < len) pos++;
+                }
+                break;
+                
+            default:
+                // Běžný vstup znaků
+                if (len < MAX_TEXT - 1 && isprint(ch)) {
+                    memmove(&text[pos+1], &text[pos], len - pos + 1);
+                    text[pos] = ch;
+                    pos++;
+                    len++;
+                    modified = 1;
+                }
+                break;
+        }
+    }
+    
+    endwin();
+    return 0;
+}
