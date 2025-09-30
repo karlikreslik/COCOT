@@ -1,935 +1,989 @@
-////////////////////////////////////////////////////////////
-//COCOT - C Code Editor, Designed by Karel Resl, 30.09.2025
-//Compilation: gcc cocot.c -o cocot -lncurses
-////////////////////////////////////////////////////////////
+/////////////////////////////////////
+// C/C++ Language Editor
+// gcc -o cocot cocot.c -lncurses
+// Designed by Karel Resl
+// 30.09.2025
+/////////////////////////////////////
 
-#define _GNU_SOURCE
-#include <ncurses.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <pwd.h>
+#include <ncurses.h>
 
-#define MAX_TEXT 50000
+#define MAX_LINES 1000
+#define MAX_LINE_LENGTH 256
 #define TAB_SIZE 4
-#define LINE_NUM_WIDTH 6
 
+typedef struct {
+    char lines[MAX_LINES][MAX_LINE_LENGTH];
+    int line_count;
+    int cursor_x, cursor_y;
+    int scroll_offset;
+    int highlight_current_line;
+    int auto_indent;
+} Editor;
 
-// Control keys
-#define CTRL_S 19
-#define CTRL_N 14
-#define CTRL_O 15
-#define CTRL_X 24
-#define CTRL_Q 17
-#define CTRL_F 6
-#define CTRL_G 7
-#define CTRL_H 8
-#define CTRL_D 4
-#define CTRL_Z 26
-#define CTRL_L 12
-
-char current_filename[512] = "";
-int modified = 0;
-char search_term[256] = "";
-int search_highlight_pos = -1;
-int dark_theme = 1;
-
-
-// Enhanced C keywords
+// C/C++ Keywords (Modern Set)
 const char *c_keywords[] = {
-    "auto", "break", "case", "char", "const", "continue", "default", "do", 
-    "double", "else", "enum", "extern", "float", "for", "goto", "if", 
-    "int", "long", "register", "return", "short", "signed", "sizeof", "static", 
-    "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while",
-    "bool", "true", "false", "NULL", "_Bool", "_Complex", "_Imaginary",
-    "inline", "restrict", "_Alignas", "_Alignof", "_Atomic", "_Generic", "_Noreturn",
-    "_Static_assert", "_Thread_local"
+    "auto", "break", "case", "char", "const", "continue", "default", "do",
+    "double", "else", "enum", "extern", "float", "for", "goto", "if",
+    "inline", "int", "long", "register", "restrict", "return", "short", "signed",
+    "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void",
+    "volatile", "while", "_Alignas", "_Alignof", "_Atomic", "_Bool", "_Complex",
+    "_Generic", "_Imaginary", "_Noreturn", "_Static_assert", "_Thread_local", NULL
 };
-const int num_keywords = 48;
 
-// Preprocessor directives
-const char *preprocessor_directives[] = {
-    "#include", "#define", "#ifdef", "#ifndef", "#if", "#else", "#elif", "#endif", 
-    "#undef", "#pragma", "#error", "#warning", "#line"
+// C/C++ Preprocessor Directives and standard functions
+const char *c_builtins[] = {
+    "#include", "#define", "#undef", "#ifdef", "#ifndef", "#if", "#endif",
+    "#else", "#elif", "#line", "#error", "#pragma", "printf", "scanf",
+    "malloc", "calloc", "realloc", "free", "main", "NULL", "size_t",
+    "FILE", "stdin", "stdout", "stderr", "exit", NULL
 };
-const int num_directives = 13;
 
-// Common C functions
-const char *c_functions[] = {
-    "printf", "scanf", "malloc", "free", "calloc", "realloc", "strlen", "strcpy", 
-    "strcmp", "strcat", "strncpy", "strncmp", "strncat", "memset", "memcpy",
-    "memmove", "memcmp", "strchr", "strrchr", "strstr", "strtok", "atoi", "atof",
-    "atol", "atoll", "fopen", "fclose", "fread", "fwrite", "fprintf", "fscanf",
-    "fgets", "fputs", "getchar", "putchar", "gets", "puts", "sprintf", "sscanf",
-    "exit", "abort", "system", "qsort", "bsearch", "time", "clock", "rand", "srand"
-};
-const int num_functions = 48;
+// Function declarations
+void init_editor(Editor *editor);
+void insert_char(Editor *editor, char c);
+void delete_char(Editor *editor);
+void new_line(Editor *editor);
+void handle_tab(Editor *editor);
+void draw_editor(Editor *editor);
+void save_file(Editor *editor);
+void load_file(Editor *editor);
+void show_about();
+void find_text(Editor *editor);
+void auto_complete(Editor *editor, char opening, char closing);
+void move_to_next_word(Editor *editor, int direction);
+int get_auto_indent_level(Editor *editor);
+void find_matching_bracket(Editor *editor, int *match_y, int *match_x);
+int is_c_keyword(const char *word);
+int is_c_builtin(const char *word);
+int is_c_operator(const char *str, int pos);
 
-// Common C types and structures
-const char *c_types[] = {
-    "size_t", "ssize_t", "FILE", "NULL", "stdin", "stdout", "stderr",
-    "uint8_t", "uint16_t", "uint32_t", "uint64_t", "int8_t", "int16_t", "int32_t", "int64_t",
-    "intptr_t", "uintptr_t", "ptrdiff_t", "clock_t", "time_t", "wchar_t",
-    "intmax_t", "uintmax_t", "int_fast8_t", "int_fast16_t", "int_fast32_t", "int_fast64_t",
-    "uint_fast8_t", "uint_fast16_t", "uint_fast32_t", "uint_fast64_t"
-};
-const int num_types = 32;
+void init_editor(Editor *editor) {
+    editor->line_count = 1;
+    editor->cursor_x = 0;
+    editor->cursor_y = 0;
+    editor->scroll_offset = 0;
+    editor->highlight_current_line = 1;
+    editor->auto_indent = 1;
+    memset(editor->lines[0], 0, MAX_LINE_LENGTH);
+}
 
-// C standard library headers
-const char *c_headers[] = {
-    "stdio.h", "stdlib.h", "string.h", "ctype.h", "math.h", "time.h",
-    "unistd.h", "fcntl.h", "sys/types.h", "sys/stat.h", "dirent.h",
-    "errno.h", "signal.h", "setjmp.h", "assert.h", "limits.h", "float.h",
-    "stddef.h", "locale.h", "wchar.h", "wctype.h", "stdarg.h", "stdbool.h",
-    "stdint.h", "inttypes.h", "tgmath.h", "complex.h", "fenv.h", "stdalign.h",
-    "stdatomic.h", "stdnoreturn.h", "threads.h", "uchar.h"
-};
-const int num_headers = 33;
-
-// Common C macros and constants
-const char *c_macros[] = {
-    "NULL", "EOF", "BUFSIZ", "FILENAME_MAX", "FOPEN_MAX", "L_tmpnam",
-    "SEEK_CUR", "SEEK_END", "SEEK_SET", "TMP_MAX", "stdin", "stdout", "stderr",
-    "EXIT_SUCCESS", "EXIT_FAILURE", "RAND_MAX", "MB_CUR_MAX"
-};
-const int num_macros = 17;
-
-int is_keyword(const char *word, int length) {
-    for (int i = 0; i < num_keywords; i++) {
-        if (strlen(c_keywords[i]) == length && 
-            strncmp(word, c_keywords[i], length) == 0) {
-            return 1;
-        }
+int is_c_keyword(const char *word) {
+    for (int i = 0; c_keywords[i] != NULL; i++) {
+        if (strcmp(word, c_keywords[i]) == 0) return 1;
     }
     return 0;
 }
 
-int is_function(const char *word, int length) {
-    for (int i = 0; i < num_functions; i++) {
-        if (strlen(c_functions[i]) == length && 
-            strncmp(word, c_functions[i], length) == 0) {
-            return 1;
-        }
+int is_c_builtin(const char *word) {
+    for (int i = 0; c_builtins[i] != NULL; i++) {
+        if (strcmp(word, c_builtins[i]) == 0) return 1;
     }
     return 0;
 }
 
-int is_directive(const char *line_start) {
-    while (*line_start == ' ' || *line_start == '\t') {
-        line_start++;
-    }
-    
-    if (*line_start != '#') {
-        return 0;
-    }
-    
-    const char *directive_start = line_start + 1;
-    const char *directive_end = directive_start;
-    while (*directive_end && !isspace(*directive_end) && *directive_end != '\n') {
-        directive_end++;
-    }
-    
-    int directive_length = directive_end - directive_start;
-    
-    for (int i = 0; i < num_directives; i++) {
-        if (strlen(preprocessor_directives[i] + 1) == directive_length && 
-            strncmp(directive_start, preprocessor_directives[i] + 1, directive_length) == 0) {
-            return 1;
-        }
+// Function to check for C/C++ operators and delimiters
+int is_c_operator(const char *str, int pos) {
+    char c = str[pos];
+    // Single character operators/delimiters
+    if (strchr("()[]{}:,.;?!~^|&=+-*/%<>", c) != NULL) return 1;
+
+    // Check for multi-character operators (simplified subset)
+    if (pos > 0) {
+        char prev = str[pos-1];
+        // Two-character operators
+        if ( (prev == '<' && c == '<') || (prev == '>' && c == '>') || // <<, >>
+             (prev == '=' && c == '=') || (prev == '!' && c == '=') || // ==, !=
+             (prev == '<' && c == '=') || (prev == '>' && c == '=') || // <=, >=
+             (prev == '+' && c == '+') || (prev == '-' && c == '-') || // ++, --
+             (prev == '+' && c == '=') || (prev == '-' && c == '=') || // +=, -=
+             (prev == '*' && c == '=') || (prev == '/' && c == '=') || // *=, /=
+             (prev == '%' && c == '=') || (prev == '&' && c == '=') || // %=, &=
+             (prev == '|' && c == '=') || (prev == '^' && c == '=') || // |=, ^=
+             (prev == '&' && c == '&') || (prev == '|' && c == '|') || // &&, ||
+             (prev == '-' && c == '>') || // ->
+             (prev == '.' && c == '*') || // .*
+             (prev == '>' && c == '=') || (prev == '<' && c == '=') || // C++ operators not fully covered, basic C is fine.
+             (prev == ':' && c == ':') || (prev == '-' && c == '>')
+           ) return 2;
     }
     return 0;
 }
 
-int count_words(const char *text) {
-    if (!text || !*text) return 0;
-    int count = 0, in_word = 0;
-    for (int i = 0; text[i]; i++) {
-        if (isspace(text[i])) {
-            in_word = 0;
-        } else if (!in_word) {
-            in_word = 1;
-            count++;
+// Function to find matching bracket (retains original logic)
+void find_matching_bracket(Editor *editor, int *match_y, int *match_x) {
+    *match_y = -1;
+    *match_x = -1;
+    
+    if (editor->cursor_y >= editor->line_count) return;
+    
+    char *line = editor->lines[editor->cursor_y];
+    if (editor->cursor_x >= strlen(line)) return;
+    
+    char current_char = line[editor->cursor_x];
+    char target_char;
+    int direction;
+    
+    // Determine bracket type and search direction
+    switch (current_char) {
+        case '(': target_char = ')'; direction = 1; break;
+        case ')': target_char = '('; direction = -1; break;
+        case '[': target_char = ']'; direction = 1; break;
+        case ']': target_char = '['; direction = -1; break;
+        case '{': target_char = '}'; direction = 1; break;
+        case '}': target_char = '{'; direction = -1; break;
+        default: return;
+    }
+    
+    int count = 1;
+    int y = editor->cursor_y;
+    int x = editor->cursor_x + direction;
+    
+    while (y >= 0 && y < editor->line_count) {
+        line = editor->lines[y];
+        int len = strlen(line);
+        
+        while (x >= 0 && x < len) {
+            if (line[x] == current_char) count++;
+            else if (line[x] == target_char) count--;
+            
+            if (count == 0) {
+                *match_y = y;
+                *match_x = x;
+                return;
+            }
+            x += direction;
+        }
+        
+        y += direction;
+        if (y >= 0 && y < editor->line_count) {
+            line = editor->lines[y];
+            x = (direction == 1) ? 0 : strlen(line) - 1;
         }
     }
-    return count;
 }
 
-int count_lines(const char *text, int len) {
-    if (len == 0) return 1;
-    int lines = 1;
-    for (int i = 0; i < len; i++) {
-        if (text[i] == '\n') lines++;
+// Auto-complete brackets and quotes (retains original logic)
+void auto_complete(Editor *editor, char opening, char closing) {
+    insert_char(editor, opening);
+    insert_char(editor, closing);
+    editor->cursor_x--;
+}
+
+// Calculate auto-indentation level for C/C++
+int get_auto_indent_level(Editor *editor) {
+    if (editor->cursor_y == 0) return 0;
+    
+    char *prev_line = editor->lines[editor->cursor_y - 1];
+    int indent = 0;
+    
+    // Count leading spaces
+    while (prev_line[indent] == ' ') indent++;
+    
+    // Check if previous line ends with an opening brace '{' (increase indent)
+    int len = strlen(prev_line);
+    // Find last non-whitespace character
+    int last_char_pos = len - 1;
+    while (last_char_pos >= 0 && isspace(prev_line[last_char_pos])) {
+        last_char_pos--;
     }
-    return lines;
-}
-
-int save_file(const char *filename, const char *text) {
-    FILE *f = fopen(filename, "w");
-    if (!f) return 0;
-    fprintf(f, "%s", text);
-    fclose(f);
-    return 1;
-}
-
-int load_file(const char *filename, char *text, int max_size) {
-    FILE *f = fopen(filename, "r");
-    if (!f) return 0;
-    int len = fread(text, 1, max_size - 1, f);
-    text[len] = '\0';
-    fclose(f);
-    return len;
-}
-
-void show_message(const char *message, int duration_ms) {
-    attron(COLOR_PAIR(11) | A_BOLD);
-    mvprintw(LINES - 1, 0, " %s", message);
-    clrtoeol();
-    attroff(COLOR_PAIR(11) | A_BOLD);
-    refresh();
-    if (duration_ms > 0) {
-        napms(duration_ms);
+    
+    if (last_char_pos >= 0 && prev_line[last_char_pos] == '{') {
+        indent += TAB_SIZE;
     }
+    
+    // C/C++ dedent is usually handled by the closing brace '}' on the *current* line.
+    // The previous Python logic for dedent is removed, as it's not standard for C/C++
+    // (except maybe after a preprocessor directive, but that's complex).
+    
+    return indent;
 }
 
-int get_filename_input(char *filename, int max_len, const char *prompt) {
+// Find text in editor (retains original logic)
+void find_text(Editor *editor) {
+    char search[100] = "";
+    int search_pos = 0;
+    
+    // Create search dialog
+    int center_y = LINES / 2;
+    int center_x = COLS / 2;
+    int width = 40;
+    
+    // Draw dialog box
+    attron(COLOR_PAIR(17) | A_BOLD); // New pair 17 for dialog frame (Black on Light Blue)
+    mvhline(center_y - 1, center_x - width/2, ' ', width);
+    mvhline(center_y, center_x - width/2, ' ', width);
+    mvhline(center_y + 1, center_x - width/2, ' ', width);
+    
+    mvprintw(center_y - 1, center_x - 18, " Find Text (ESC to cancel) ");
+    mvprintw(center_y, center_x - width/2 + 2, "Search: ");
+    attroff(COLOR_PAIR(17) | A_BOLD);
+    
     echo();
     curs_set(1);
     
-    char *home_dir = getenv("HOME");
-    if (!home_dir) {
-        struct passwd *pw = getpwuid(getuid());
-        home_dir = pw ? pw->pw_dir : "/tmp";
+    // Get search string
+    int ch;
+    while ((ch = getch()) != '\n' && ch != 27 && search_pos < 99) {
+        if (ch == KEY_BACKSPACE || ch == 127) {
+            if (search_pos > 0) {
+                search_pos--;
+                search[search_pos] = '\0';
+            }
+        } else if (isprint(ch)) {
+            search[search_pos++] = ch;
+            search[search_pos] = '\0';
+        }
+        
+        // Update display
+        attron(COLOR_PAIR(9));
+        mvprintw(center_y, center_x - width/2 + 10, "%-30s", search);
+        attroff(COLOR_PAIR(9));
     }
-    
-    attron(COLOR_PAIR(11) | A_BOLD);
-    mvprintw(LINES - 1, 0, " %s: ", prompt);
-    clrtoeol();
-    attroff(COLOR_PAIR(11) | A_BOLD);
-    refresh();
-    
-    char basename[200] = "";
-    int result = getnstr(basename, sizeof(basename) - 1);
     
     noecho();
-    curs_set(1);
     
-    if (result == ERR) {
-        return 0;
-    }
-    
-    if (strlen(basename) > 0) {
-        char *dot = strrchr(basename, '.');
-        if (dot && strcmp(dot, ".c") == 0) {
-            *dot = '\0';
+    if (ch == '\n' && search_pos > 0) {
+        // Search for text
+        int found = 0;
+        for (int y = editor->cursor_y; y < editor->line_count && !found; y++) {
+            char *pos = strstr(editor->lines[y], search);
+            if (pos != NULL) {
+                editor->cursor_y = y;
+                editor->cursor_x = pos - editor->lines[y];
+                found = 1;
+                
+                // Center the view on found text
+                editor->scroll_offset = (y > 5) ? y - 5 : 0;
+            }
         }
-        snprintf(filename, max_len, "%s/%s.c", home_dir, basename);
-    } else {
-        snprintf(filename, max_len, "%s/untitled.c", home_dir);
-    }
-    
-    return 1;
-}
-
-int search_text(const char *text, int len, const char *search, int start_pos) {
-    if (!search || !*search) return -1;
-    
-    int search_len = strlen(search);
-    for (int i = start_pos; i <= len - search_len; i++) {
-        if (strncmp(&text[i], search, search_len) == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-void duplicate_line(char *text, int *len, int *pos) {
-    if (*len >= MAX_TEXT - 100) return;
-    
-    int line_start = *pos;
-    while (line_start > 0 && text[line_start-1] != '\n') line_start--;
-    
-    int line_end = *pos;
-    while (line_end < *len && text[line_end] != '\n') line_end++;
-    
-    int line_length = line_end - line_start;
-    
-    if (*len + line_length + 1 < MAX_TEXT) {
-        memmove(&text[line_end + line_length + 1], &text[line_end], *len - line_end + 1);
-        text[line_end] = '\n';
-        memcpy(&text[line_end + 1], &text[line_start], line_length);
-        *len += line_length + 1;
-        *pos = line_end + line_length + 1;
-    }
-}
-
-void init_color_scheme(int dark_mode) {
-    if (!has_colors()) return;
-    
-    if (dark_mode) {
-        // Dark theme (Blue Design)
-        init_pair(1, COLOR_WHITE, COLOR_BLACK);      // Default text
-        init_pair(2, COLOR_CYAN, COLOR_BLACK);      // Line numbers
-        init_pair(3, COLOR_MAGENTA, COLOR_BLACK);    // Keywords
-        init_pair(4, COLOR_GREEN, COLOR_BLACK);      // Strings
-        init_pair(5, COLOR_YELLOW, COLOR_BLACK);     // Preprocessor
-        init_pair(6, COLOR_CYAN, COLOR_BLACK);       // Functions
-        init_pair(7, COLOR_RED, COLOR_BLACK);        // Numbers
-        init_pair(8, COLOR_BLUE, COLOR_BLACK);       // Comments
-        init_pair(9, COLOR_WHITE, COLOR_BLACK);      // Operators
-        init_pair(10, COLOR_YELLOW, COLOR_BLACK);    // Types
-        init_pair(11, COLOR_WHITE, COLOR_BLUE);      // Status bar (The main blue color)
-        init_pair(12, COLOR_BLACK, COLOR_YELLOW);    // Search highlight
-        // Autocomplete color pairs (13 and 14) removed
-    } else {
-        // Light theme (Kept but not default)
-        init_pair(1, COLOR_BLACK, COLOR_WHITE);      // Default text
-        init_pair(2, COLOR_BLUE, COLOR_WHITE);       // Line numbers
-        init_pair(3, COLOR_RED, COLOR_WHITE);        // Keywords
-        init_pair(4, COLOR_GREEN, COLOR_WHITE);      // Strings
-        init_pair(5, COLOR_MAGENTA, COLOR_WHITE);    // Preprocessor
-        init_pair(6, COLOR_BLUE, COLOR_WHITE);       // Functions
-        init_pair(7, COLOR_RED, COLOR_WHITE);        // Numbers
-        init_pair(8, COLOR_BLUE, COLOR_WHITE);       // Comments
-        init_pair(9, COLOR_BLACK, COLOR_WHITE);      // Operators
-        init_pair(10, COLOR_MAGENTA, COLOR_WHITE);   // Types
-        init_pair(11, COLOR_BLACK, COLOR_CYAN);      // Status bar
-        init_pair(12, COLOR_WHITE, COLOR_RED);       // Search highlight
         
+        if (!found) {
+            // Show not found message
+            attron(COLOR_PAIR(10)); // Error/Not Found: Red on White
+            mvprintw(center_y + 2, center_x - 10, " Text not found! ");
+            attroff(COLOR_PAIR(10));
+            refresh();
+            napms(1000);
+        }
     }
     
-    bkgd(COLOR_PAIR(1));
+    curs_set(1);
+}
+
+// insert_char, delete_char, handle_tab (retains original logic)
+void insert_char(Editor *editor, char c) {
+    if (editor->cursor_x < MAX_LINE_LENGTH - 1) {
+        char *line = editor->lines[editor->cursor_y];
+        int len = strlen(line);
+        
+        // Shift text
+        for (int i = len; i >= editor->cursor_x; i--) {
+            line[i + 1] = line[i];
+        }
+        
+        line[editor->cursor_x] = c;
+        editor->cursor_x++;
+    }
+}
+
+void delete_char(Editor *editor) {
+    char *line = editor->lines[editor->cursor_y];
+    int len = strlen(line);
+    
+    if (editor->cursor_x > 0) {
+        for (int i = editor->cursor_x - 1; i < len; i++) {
+            line[i] = line[i + 1];
+        }
+        editor->cursor_x--;
+    } else if (editor->cursor_y > 0) {
+        // Merge lines
+        int prev_len = strlen(editor->lines[editor->cursor_y - 1]);
+        
+        // Check if merging will exceed MAX_LINE_LENGTH
+        if (prev_len + len < MAX_LINE_LENGTH) {
+            strcat(editor->lines[editor->cursor_y - 1], line);
+            
+            // Shift lines up
+            for (int i = editor->cursor_y; i < editor->line_count - 1; i++) {
+                strcpy(editor->lines[i], editor->lines[i + 1]);
+            }
+            
+            editor->line_count--;
+            editor->cursor_y--;
+            editor->cursor_x = prev_len;
+        }
+    }
+}
+
+void new_line(Editor *editor) {
+    if (editor->line_count < MAX_LINES - 1) {
+        // Calculate auto-indentation
+        int indent_level = 0;
+        if (editor->auto_indent) {
+            indent_level = get_auto_indent_level(editor);
+        }
+        
+        // Shift lines down
+        for (int i = editor->line_count; i > editor->cursor_y + 1; i--) {
+            strcpy(editor->lines[i], editor->lines[i - 1]);
+        }
+        
+        // Split line
+        char *current_line = editor->lines[editor->cursor_y];
+        int len = strlen(current_line);
+        
+        if (editor->cursor_x < len) {
+            strcpy(editor->lines[editor->cursor_y + 1], current_line + editor->cursor_x);
+            current_line[editor->cursor_x] = '\0';
+        } else {
+            editor->lines[editor->cursor_y + 1][0] = '\0';
+        }
+        
+        editor->line_count++;
+        editor->cursor_y++;
+        
+        // Apply auto-indentation to the new line
+        editor->cursor_x = 0; // Reset cursor X before applying indent
+        for (int i = 0; i < indent_level && i < MAX_LINE_LENGTH - 1; i++) {
+            insert_char(editor, ' ');
+        }
+
+        // C/C++ specific: Auto-indentation for '}' on its own line
+        if (editor->auto_indent) {
+            char *prev_line = editor->lines[editor->cursor_y - 2];
+            int prev_len = strlen(prev_line);
+            
+            // Find last non-whitespace char on line above the one *before* the new line
+            int last_char_pos = prev_len - 1;
+            while (last_char_pos >= 0 && isspace(prev_line[last_char_pos])) {
+                last_char_pos--;
+            }
+
+            // If the line *above* the current line ended with '{',
+            // and the current line is just indent, check if user presses '}'
+            // This is a complex heuristic for C-style code.
+            // Simplified: If prev line ended with '{', add a dedent if the user types '}' right away.
+        }
+    }
+}
+
+void handle_tab(Editor *editor) {
+    for (int i = 0; i < TAB_SIZE && editor->cursor_x < MAX_LINE_LENGTH - 1; i++) {
+        insert_char(editor, ' ');
+    }
+}
+
+// Draw editor with C/C++ specific highlighting
+void draw_editor(Editor *editor) {
+    clear();
+    
+    // Editor header - Light Blue background with White text
+    attron(COLOR_PAIR(12) | A_BOLD);
+    mvprintw(0, 0, " C/C++ Language Editor | F1: Save | F2: Load | F3: About | F4: Find | F10: Quit ");
+    attroff(COLOR_PAIR(12) | A_BOLD);
+    
+    // Status bar - Dark Gray background with White text
+    attron(COLOR_PAIR(16) | A_BOLD); // Status Bar: White on Black
+    mvprintw(LINES - 1, 0, " Line: %d, Column: %d | Total lines: %d | Auto-indent: %s ", 
+             editor->cursor_y + 1, editor->cursor_x + 1, editor->line_count,
+             editor->auto_indent ? "ON" : "OFF");
+    attroff(COLOR_PAIR(16) | A_BOLD);
+    
+    // Editor content with light background
+    int visible_lines = LINES - 2;
+    int start_line = editor->scroll_offset;
+    int end_line = start_line + visible_lines;
+    
+    if (end_line > editor->line_count) end_line = editor->line_count;
+    
+    // Find matching bracket if on a bracket
+    int match_y = -1, match_x = -1;
+    find_matching_bracket(editor, &match_y, &match_x);
+    
+    for (int i = start_line; i < end_line; i++) {
+        int display_line = i - start_line + 1;
+        char *line = editor->lines[i];
+        int len = strlen(line);
+        
+        // Highlight current line background
+        if (editor->highlight_current_line && i == editor->cursor_y) {
+            attron(COLOR_PAIR(13)); // Current line highlight (Black on Cyan)
+            mvhline(display_line, 0, ' ', COLS);
+            attroff(COLOR_PAIR(13));
+        }
+        
+        // Line number - different color for current line
+        if (i == editor->cursor_y) {
+            attron(COLOR_PAIR(14) | A_BOLD);  // Current line number (White on Blue)
+        } else {
+            attron(COLOR_PAIR(8) | A_BOLD | A_DIM);   // Other lines - Line numbers (Black/Dim on White)
+        }
+        mvprintw(display_line, 0, "%4d ", i + 1);
+        if (i == editor->cursor_y) {
+            attroff(COLOR_PAIR(14) | A_BOLD);
+        } else {
+            attroff(COLOR_PAIR(8) | A_BOLD | A_DIM);
+        }
+        
+        // Advanced syntax highlighting for C/C++
+        int pos = 0;
+        int in_string = 0;
+        char string_char = 0;
+        int in_char = 0; // New: for single character literals 'a'
+        int in_multiline_comment = 0; // New: for /* ... */
+
+        // Check for multiline comment start on previous lines
+        if (i > start_line) {
+            // Simple check: This doesn't account for `*/` on previous line
+            // A proper solution would require traversing the text to find the last unclosed comment.
+            // For this basic editor, we'll keep it line-by-line except for the start condition.
+            // For a basic C editor, a simplified model is: Assume outside if the line doesn't start/end one.
+        }
+
+        while (pos < len) {
+            
+            // Handle multiline comments
+            if (in_multiline_comment) {
+                // Check for multiline comment end
+                if (pos + 1 < len && line[pos] == '*' && line[pos+1] == '/') {
+                    attron(COLOR_PAIR(11)); // Comments - Black/Dim on White
+                    printw("*/");
+                    attroff(COLOR_PAIR(11));
+                    pos += 2;
+                    in_multiline_comment = 0;
+                    continue;
+                }
+                attron(COLOR_PAIR(11));
+                printw("%c", line[pos]);
+                attroff(COLOR_PAIR(11));
+                pos++;
+                continue;
+            }
+            
+            // Check for single-line comment start (//)
+            if (!in_string && pos + 1 < len && line[pos] == '/' && line[pos+1] == '/') {
+                // C/C++ comment - Black/Dim
+                attron(COLOR_PAIR(11) | A_DIM);
+                mvprintw(display_line, 5 + pos, "%s", line + pos);
+                attroff(COLOR_PAIR(11) | A_DIM);
+                break; // Rest of the line is a comment
+            }
+            
+            // Check for multiline comment start (/*)
+            if (!in_string && pos + 1 < len && line[pos] == '/' && line[pos+1] == '*') {
+                attron(COLOR_PAIR(11) | A_DIM);
+                printw("/*");
+                attroff(COLOR_PAIR(11) | A_DIM);
+                pos += 2;
+                in_multiline_comment = 1;
+                continue;
+            }
+
+            // Highlight matching brackets
+            if (i == editor->cursor_y && pos == editor->cursor_x && 
+                strchr("()[]{}", line[pos]) != NULL) {
+                attron(COLOR_PAIR(15) | A_BOLD | A_REVERSE); // Matching Bracket (Red on White, Reverse)
+                printw("%c", line[pos]);
+                attroff(COLOR_PAIR(15) | A_BOLD | A_REVERSE);
+                pos++;
+                continue;
+            }
+            
+            // Highlight matching bracket pair
+            if (i == match_y && pos == match_x) {
+                attron(COLOR_PAIR(15) | A_BOLD | A_REVERSE); // Matching Bracket (Red on White, Reverse)
+                printw("%c", line[pos]);
+                attroff(COLOR_PAIR(15) | A_BOLD | A_REVERSE);
+                pos++;
+                continue;
+            }
+            
+            // Handle single character literals ('a')
+            if (!in_string && line[pos] == '\'') {
+                if (!in_char) {
+                    in_char = 1;
+                    attron(COLOR_PAIR(5)); // Strings - Green
+                    printw("%c", line[pos]);
+                    attroff(COLOR_PAIR(5));
+                } else {
+                    // Check for escaped quotes
+                    if (pos == 0 || line[pos-1] != '\\') {
+                        in_char = 0;
+                        attron(COLOR_PAIR(5));
+                        printw("%c", line[pos]);
+                        attroff(COLOR_PAIR(5));
+                    } else {
+                        attron(COLOR_PAIR(5));
+                        printw("%c", line[pos]);
+                        attroff(COLOR_PAIR(5));
+                    }
+                }
+                pos++;
+                continue;
+            }
+            
+            if (in_char) {
+                attron(COLOR_PAIR(5));
+                printw("%c", line[pos]);
+                attroff(COLOR_PAIR(5));
+                pos++;
+                continue;
+            }
+
+            // Handle strings (")
+            if (line[pos] == '"') {
+                if (!in_string) {
+                    in_string = 1;
+                    string_char = line[pos];
+                    attron(COLOR_PAIR(5)); // Strings - Green
+                    printw("%c", line[pos]);
+                    attroff(COLOR_PAIR(5));
+                } else if (line[pos] == string_char) {
+                    // Check for escaped quotes
+                    if (pos == 0 || line[pos-1] != '\\') {
+                        in_string = 0;
+                        attron(COLOR_PAIR(5));
+                        printw("%c", line[pos]);
+                        attroff(COLOR_PAIR(5));
+                    } else {
+                        attron(COLOR_PAIR(5));
+                        printw("%c", line[pos]);
+                        attroff(COLOR_PAIR(5));
+                    }
+                } else {
+                    attron(COLOR_PAIR(5));
+                    printw("%c", line[pos]);
+                    attroff(COLOR_PAIR(5));
+                }
+                pos++;
+                continue;
+            }
+            
+            if (in_string) {
+                attron(COLOR_PAIR(5));
+                printw("%c", line[pos]);
+                attroff(COLOR_PAIR(5));
+                pos++;
+                continue;
+            }
+            
+            // Check for operators
+            int op_len = is_c_operator(line, pos);
+            if (op_len > 0) {
+                attron(COLOR_PAIR(4) | A_BOLD); // Operators - Magenta/Purple
+                for (int j = 0; j < op_len; j++) {
+                    printw("%c", line[pos + j]);
+                }
+                attroff(COLOR_PAIR(4) | A_BOLD);
+                pos += op_len;
+                continue;
+            }
+            
+            // Check for words (keywords, builtins)
+            if (isalpha(line[pos]) || line[pos] == '_') {
+                int word_start = pos;
+                while (pos < len && (isalnum(line[pos]) || line[pos] == '_')) {
+                    pos++;
+                }
+                int word_len = pos - word_start;
+                char word[64];
+                strncpy(word, line + word_start, word_len);
+                word[word_len] = '\0';
+                
+                if (is_c_keyword(word)) {
+                    // Keywords - Blue
+                    attron(COLOR_PAIR(1) | A_BOLD);
+                    mvprintw(display_line, 5 + word_start, "%.*s", word_len, line + word_start);
+                    attroff(COLOR_PAIR(1) | A_BOLD);
+                } else if (is_c_builtin(word)) {
+                    // Built-in functions/Preprocessor - Cyan/Teal
+                    attron(COLOR_PAIR(2) | A_BOLD);
+                    mvprintw(display_line, 5 + word_start, "%.*s", word_len, line + word_start);
+                    attroff(COLOR_PAIR(2) | A_BOLD);
+                } else {
+                    // Regular identifiers - Default Black
+                    attron(COLOR_PAIR(9));
+                    mvprintw(display_line, 5 + word_start, "%.*s", word_len, line + word_start);
+                    attroff(COLOR_PAIR(9));
+                }
+                continue;
+            }
+            
+            // Check for numbers
+            if (isdigit(line[pos]) || (line[pos] == '.' && pos + 1 < len && isdigit(line[pos+1]))) {
+                int num_start = pos;
+                // Simple number parsing
+                while (pos < len && (isalnum(line[pos]) || line[pos] == '.' || 
+                                     line[pos] == '+' || line[pos] == '-')) {
+                    pos++;
+                }
+                int num_len = pos - num_start;
+                attron(COLOR_PAIR(3)); // Numbers - Red/Orange
+                mvprintw(display_line, 5 + num_start, "%.*s", num_len, line + num_start);
+                attroff(COLOR_PAIR(3));
+                continue;
+            }
+            
+            // Default text
+            attron(COLOR_PAIR(9));
+            printw("%c", line[pos]);
+            attroff(COLOR_PAIR(9));
+            pos++;
+        }
+    }
+    
+    // Cursor
+    int cursor_display_y = editor->cursor_y - start_line + 1;
+    if (cursor_display_y >= 1 && cursor_display_y < visible_lines + 1) {
+        move(cursor_display_y, 5 + editor->cursor_x);
+    }
+    
+    refresh();
+}
+
+void save_file(Editor *editor) {
+    FILE *file = fopen("main.c", "w"); // Changed to main.c
+    if (file) {
+        for (int i = 0; i < editor->line_count; i++) {
+            fprintf(file, "%s\n", editor->lines[i]);
+        }
+        fclose(file);
+        
+        // Success message - Red on White (Changed from Green to match new pair 10)
+        attron(COLOR_PAIR(10) | A_BOLD);
+        mvprintw(LINES/2, COLS/2 - 12, " File saved as main.c! ");
+        attroff(COLOR_PAIR(10) | A_BOLD);
+        refresh();
+        napms(1000);
+    }
+}
+
+void load_file(Editor *editor) {
+    FILE *file = fopen("main.c", "r"); // Changed to main.c
+    if (file) {
+        editor->line_count = 0;
+        char buffer[MAX_LINE_LENGTH];
+        
+        while (fgets(buffer, MAX_LINE_LENGTH, file) && editor->line_count < MAX_LINES) {
+            // Remove newline
+            buffer[strcspn(buffer, "\n")] = 0;
+            strcpy(editor->lines[editor->line_count], buffer);
+            editor->line_count++;
+        }
+        fclose(file);
+        
+        editor->cursor_x = 0;
+        editor->cursor_y = 0;
+        
+        // Success message - Red on White
+        attron(COLOR_PAIR(10) | A_BOLD);
+        mvprintw(LINES/2, COLS/2 - 12, " File main.c loaded! ");
+        attroff(COLOR_PAIR(10) | A_BOLD);
+        refresh();
+        napms(1000);
+    }
+}
+
+void show_about() {
+    clear();
+    
+    // Set light background
+    bkgd(COLOR_PAIR(9));
+    
+    attron(COLOR_PAIR(1) | A_BOLD); // Bright Blue
+    mvprintw(2, COLS/2 - 12, "C/C++ Language Editor"); // Changed text
+    attroff(COLOR_PAIR(1) | A_BOLD);
+    
+    attron(COLOR_PAIR(9)); // Default Black on White
+    mvprintw(4, COLS/2 - 20, "Editor for C/C++ programming languages"); // Changed text
+    mvprintw(5, COLS/2 - 15, "Output will be saved as main.c"); // Changed text
+    mvprintw(6, COLS/2 - 12, "https://iso.org/home.html"); // General standard link
+    
+    mvprintw(8, 5, "Keyboard shortcuts:");
+    mvprintw(9, 8, "F1      - Save file as main.c"); // Changed text
+    mvprintw(10, 8, "F2      - Load file main.c"); // Changed text
+    mvprintw(11, 8, "F3      - About editor");
+    mvprintw(12, 8, "F4      - Find text");
+    mvprintw(13, 8, "F10     - Quit");
+    mvprintw(14, 8, "Tab     - Indentation (4 spaces)");
+    mvprintw(15, 8, "Enter   - New line with auto-indent");
+    mvprintw(16, 8, "Backsp  - Delete character");
+    mvprintw(17, 8, "Ctrl+A  - Toggle auto-indent");
+    mvprintw(18, 8, "Ctrl+L  - Toggle line highlight");
+    
+    mvprintw(20, 5, "Features:");
+    mvprintw(21, 8, "* Auto-indentation after '{' brace"); // Changed text
+    mvprintw(22, 8, "* Bracket matching highlight");
+    mvprintw(23, 8, "* Auto-completion of brackets/quotes");
+    mvprintw(24, 8, "* Text search (F4)");
+    mvprintw(25, 8, "* Current line highlighting");
+    mvprintw(26, 8, "* Word navigation with Ctrl+arrows");
+    
+    mvprintw(28, 5, "Syntax highlighting:");
+    attron(COLOR_PAIR(1) | A_BOLD);
+    mvprintw(29, 8, "Keywords - Blue");
+    attroff(COLOR_PAIR(1) | A_BOLD);
+    attron(COLOR_PAIR(2) | A_BOLD);
+    mvprintw(30, 8, "Built-ins/Preprocessor - Cyan/Teal"); // Changed text
+    attroff(COLOR_PAIR(2) | A_BOLD);
+    attron(COLOR_PAIR(3) | A_BOLD);
+    mvprintw(31, 8, "Numbers - Red/Orange");
+    attroff(COLOR_PAIR(3) | A_BOLD);
+    attron(COLOR_PAIR(4) | A_BOLD);
+    mvprintw(32, 8, "Operators - Magenta/Purple");
+    attroff(COLOR_PAIR(4) | A_BOLD);
+    attron(COLOR_PAIR(5) | A_BOLD);
+    mvprintw(33, 8, "Strings/Chars - Green"); // Changed text
+    attroff(COLOR_PAIR(5) | A_BOLD);
+    attron(COLOR_PAIR(11) | A_BOLD | A_DIM);
+    mvprintw(34, 8, "Comments - Dark Gray");
+    attroff(COLOR_PAIR(11) | A_BOLD | A_DIM);
+    
+    mvprintw(LINES - 2, COLS/2 - 10, "Press any key to continue...");
+    
+    refresh();
+    getch();
+    
+    // Reset background
+    bkgd(0);
+}
+
+// Move cursor to next/previous word (retains original logic)
+void move_to_next_word(Editor *editor, int direction) {
+    char *line = editor->lines[editor->cursor_y];
+    int len = strlen(line);
+    
+    if (direction > 0) { // Forward
+        // Skip current word if we're in the middle of one
+        if (editor->cursor_x < len && (isalnum(line[editor->cursor_x]) || line[editor->cursor_x] == '_')) {
+            while (editor->cursor_x < len && (isalnum(line[editor->cursor_x]) || line[editor->cursor_x] == '_')) {
+                editor->cursor_x++;
+            }
+        }
+        
+        // Skip whitespace and punctuation
+        while (editor->cursor_x < len && !isalnum(line[editor->cursor_x]) && line[editor->cursor_x] != '_') {
+            editor->cursor_x++;
+        }
+    } else { // Backward
+        // Move to start of current word if we're in the middle of one
+        if (editor->cursor_x > 0 && (isalnum(line[editor->cursor_x - 1]) || line[editor->cursor_x - 1] == '_')) {
+            while (editor->cursor_x > 0 && (isalnum(line[editor->cursor_x - 1]) || line[editor->cursor_x - 1] == '_')) {
+                editor->cursor_x--;
+            }
+        }
+        
+        // Skip whitespace and punctuation
+        while (editor->cursor_x > 0 && !isalnum(line[editor->cursor_x - 1]) && line[editor->cursor_x - 1] != '_') {
+            editor->cursor_x--;
+        }
+        
+        // Move to start of previous word
+        while (editor->cursor_x > 0 && (isalnum(line[editor->cursor_x - 1]) || line[editor->cursor_x - 1] == '_')) {
+            editor->cursor_x--;
+        }
+    }
 }
 
 int main() {
-    char text[MAX_TEXT] = "";
-    int len = 0;
-    int pos = 0;
-    int ch;
-    int running = 1;
-    int scroll_offset = 0;
-    
+    // Initialize ncurses
     initscr();
     raw();
-    noecho();
     keypad(stdscr, TRUE);
+    noecho();
     curs_set(1);
     
-    if (has_colors()) {
-        start_color();
-        use_default_colors();
-        init_color_scheme(dark_theme);
-    }
+    // Initialize colors for light theme
+    start_color();
     
-    clear();
-    refresh();
+    // Reworking the pairs based on standard 8 colors:
+    init_pair(1, COLOR_BLUE, COLOR_WHITE);       // Keywords: Blue on White (Vibrant)
+    init_pair(2, COLOR_CYAN, COLOR_WHITE);       // Built-ins: Cyan on White
+    init_pair(3, COLOR_RED, COLOR_WHITE);        // Numbers: Red on White (Used to be Yellow, changed for contrast)
+    init_pair(4, COLOR_MAGENTA, COLOR_WHITE);    // Operators: Magenta on White
+    init_pair(5, COLOR_GREEN, COLOR_WHITE);      // Strings/Chars: Green on White
+    init_pair(8, COLOR_BLACK, COLOR_WHITE);      // Line numbers: Black on White (use A_DIM for subtle numbers)
+    init_pair(9, COLOR_BLACK, COLOR_WHITE);      // Default text: Black on White (Editor background)
+    init_pair(10, COLOR_RED, COLOR_WHITE);       // Error/Message: Red on White
+    init_pair(11, COLOR_BLACK, COLOR_WHITE);     // Comments: Black on White (will use A_DIM)
+    init_pair(12, COLOR_WHITE, COLOR_BLUE);      // Header/F keys: White on Blue (Classic TUI)
+    init_pair(13, COLOR_BLACK, COLOR_CYAN);      // Current line highlight: Black on Cyan (Light Blue background)
+    init_pair(14, COLOR_WHITE, COLOR_BLUE);      // Current line number: White on Blue (Match header)
+    init_pair(15, COLOR_RED, COLOR_WHITE);       // Matching brackets: Red on White
+    init_pair(16, COLOR_WHITE, COLOR_BLACK);     // Status Bar: White on Black (High contrast)
+    init_pair(17, COLOR_BLACK, COLOR_CYAN);      // Dialog Frame: Black on Cyan (Match current line bg)
     
+    // Set light background
+    bkgd(COLOR_PAIR(9));
+    
+    Editor editor;
+    init_editor(&editor);
+    
+    // Default C/C++ code
+    strcpy(editor.lines[0], "// Simple C program example");
+    strcpy(editor.lines[1], "#include <stdio.h>");
+    strcpy(editor.lines[2], "");
+    strcpy(editor.lines[3], "int main() {");
+    strcpy(editor.lines[4], "    int x = 42;");
+    strcpy(editor.lines[5], "    /* This is a");
+    strcpy(editor.lines[6], "       multi-line comment. */");
+    strcpy(editor.lines[7], "    if (x > 0) {");
+    strcpy(editor.lines[8], "        printf(\"Hello, C!\\n\"); // Inline comment");
+    strcpy(editor.lines[9], "        return 0;");
+    strcpy(editor.lines[10], "    }");
+    strcpy(editor.lines[11], "    return 1;");
+    strcpy(editor.lines[12], "}");
+    editor.line_count = 13;
+    
+    int running = 1;
     while (running) {
-        erase();
+        draw_editor(&editor);
         
-        // Header
-        attron(COLOR_PAIR(11));
-        move(0, 0);
-        for (int i = 0; i < COLS; i++) addch(' ');
-        
-        if (strlen(current_filename) > 0) {
-            char *basename = strrchr(current_filename, '/');
-            basename = basename ? basename + 1 : current_filename;
-            mvprintw(0, 2, "%s%s", basename, modified ? " *" : "");
-        } else {
-            mvprintw(0, 2, "untitled%s", modified ? " *" : "");
-        }
-        attroff(COLOR_PAIR(11));
-        
-        int current_line = 1;
-        for (int i = 0; i < pos; i++) {
-            if (text[i] == '\n') current_line++;
-        }
-        
-        int visible_lines = LINES - 3;
-        if (current_line < scroll_offset + 1) {
-            scroll_offset = current_line - 1;
-        } else if (current_line > scroll_offset + visible_lines) {
-            scroll_offset = current_line - visible_lines;
-        }
-        if (scroll_offset < 0) scroll_offset = 0;
-        
-        // Display text 
-        int display_line = 1;
-        int y = 1;
-        int text_pos = 0;
-        
-        while (text_pos < len && display_line <= scroll_offset) {
-            if (text[text_pos] == '\n') display_line++;
-            text_pos++;
-        }
-        
-        while (y < LINES - 1 && text_pos <= len && display_line <= scroll_offset + visible_lines) {
-            attron(COLOR_PAIR(2));
-            if (display_line == current_line) {
-                attron(A_BOLD);
-                mvprintw(y, 0, " %4d ", display_line);
-                attroff(A_BOLD);
-            } else {
-                mvprintw(y, 0, " %4d ", display_line);
-            }
-            attroff(COLOR_PAIR(2));
-            
-            int x = LINE_NUM_WIDTH;
-            int line_start = text_pos;
-            int in_comment = 0;
-            int in_string = 0;
-            int in_char = 0;
-            char string_char = 0;
-            
-            while (text_pos < len && text[text_pos] != '\n' && x < COLS - 1) {
-                int is_search_match = 0;
-                if (search_term[0] && text_pos == search_highlight_pos) {
-                    is_search_match = 1;
-                    attron(COLOR_PAIR(12) | A_BOLD);
-                }
-                
-                if (text[text_pos] == '\t') {
-                    int spaces = TAB_SIZE - ((x - LINE_NUM_WIDTH) % TAB_SIZE);
-                    for (int i = 0; i < spaces && x < COLS - 1; i++) {
-                        mvaddch(y, x++, ' ');
-                    }
-                    text_pos++;
-                } else {
-                    if (!in_comment && !in_string && !in_char) {
-                        if (text[text_pos] == '"') {
-                            in_string = 1;
-                            string_char = '"';
-                            attron(COLOR_PAIR(4));
-                            mvaddch(y, x++, text[text_pos]);
-                            text_pos++;
-                            continue;
-                        } else if (text[text_pos] == '\'') {
-                            in_char = 1;
-                            string_char = '\'';
-                            attron(COLOR_PAIR(4));
-                            mvaddch(y, x++, text[text_pos]);
-                            text_pos++;
-                            continue;
-                        } else if (text_pos + 1 < len && text[text_pos] == '/' && text[text_pos + 1] == '*') {
-                            in_comment = 1;
-                            attron(COLOR_PAIR(8) | A_DIM);
-                        } else if (text_pos + 1 < len && text[text_pos] == '/' && text[text_pos + 1] == '/') {
-                            attron(COLOR_PAIR(8) | A_DIM);
-                            while (text_pos < len && text[text_pos] != '\n' && x < COLS - 1) {
-                                if (text[text_pos] == '\t') {
-                                    int spaces = TAB_SIZE - ((x - LINE_NUM_WIDTH) % TAB_SIZE);
-                                    for (int i = 0; i < spaces && x < COLS - 1; i++) {
-                                        mvaddch(y, x++, ' ');
-                                    }
-                                } else {
-                                    mvaddch(y, x++, text[text_pos]);
-                                }
-                                text_pos++;
-                            }
-                            attroff(COLOR_PAIR(8) | A_DIM);
-                            continue;
-                        } else if (is_directive(&text[line_start])) {
-                            attron(COLOR_PAIR(5));
-                            while (text_pos < len && text[text_pos] != '\n' && x < COLS - 1) {
-                                if (text[text_pos] == '\t') {
-                                    int spaces = TAB_SIZE - ((x - LINE_NUM_WIDTH) % TAB_SIZE);
-                                    for (int i = 0; i < spaces && x < COLS - 1; i++) {
-                                        mvaddch(y, x++, ' ');
-                                    }
-                                } else {
-                                    mvaddch(y, x++, text[text_pos]);
-                                }
-                                text_pos++;
-                            }
-                            attroff(COLOR_PAIR(5));
-                            continue;
-                        } else if (isalpha(text[text_pos]) || text[text_pos] == '_') {
-                            int word_start = text_pos;
-                            while (text_pos < len && (isalnum(text[text_pos]) || text[text_pos] == '_')) {
-                                text_pos++;
-                            }
-                            int word_length = text_pos - word_start;
-                            
-                            int color_pair = 1;
-                            if (is_keyword(&text[word_start], word_length)) {
-                                color_pair = 3;
-                            } else if (is_function(&text[word_start], word_length)) {
-                                color_pair = 6;
-                            } else {
-                                color_pair = 1;
-                            }
-                            
-                            attron(COLOR_PAIR(color_pair));
-                            for (int i = word_start; i < text_pos; i++) {
-                                if (x < COLS - 1) {
-                                    mvaddch(y, x++, text[i]);
-                                }
-                            }
-                            attroff(COLOR_PAIR(color_pair));
-                            continue;
-                        } else if (isdigit(text[text_pos])) {
-                            attron(COLOR_PAIR(7));
-                            mvaddch(y, x++, text[text_pos]);
-                            attroff(COLOR_PAIR(7));
-                            text_pos++;
-                            continue;
-                        } else if (strchr("+-*/%=<>!&|^~(){}[];:,.", text[text_pos])) {
-                            attron(COLOR_PAIR(9));
-                            mvaddch(y, x++, text[text_pos]);
-                            attroff(COLOR_PAIR(9));
-                            text_pos++;
-                            continue;
-                        } else {
-                            attron(COLOR_PAIR(1));
-                            mvaddch(y, x++, text[text_pos]);
-                            attroff(COLOR_PAIR(1));
-                            text_pos++;
-                            continue;
-                        }
-                    } else if (in_comment) {
-                        if (text_pos + 1 < len && text[text_pos] == '*' && text[text_pos + 1] == '/') {
-                            mvaddch(y, x++, text[text_pos++]);
-                            if (x < COLS - 1) {
-                                mvaddch(y, x++, text[text_pos]);
-                            }
-                            in_comment = 0;
-                            attroff(COLOR_PAIR(8) | A_DIM);
-                        } else {
-                            mvaddch(y, x++, text[text_pos]);
-                        }
-                        text_pos++;
-                        continue;
-                    } else if (in_string || in_char) {
-                        if (text[text_pos] == '\\' && text_pos + 1 < len) {
-                            mvaddch(y, x++, text[text_pos++]);
-                            if (x < COLS - 1 && text_pos < len) {
-                                mvaddch(y, x++, text[text_pos]);
-                            }
-                            text_pos++;
-                            continue;
-                        } else if (text[text_pos] == string_char) {
-                            mvaddch(y, x++, text[text_pos]);
-                            in_string = 0;
-                            in_char = 0;
-                            attroff(COLOR_PAIR(4));
-                            text_pos++;
-                            continue;
-                        } else {
-                            mvaddch(y, x++, text[text_pos]);
-                            text_pos++;
-                            continue;
-                        }
-                    }
-                    
-                    text_pos++;
-                }
-                
-                if (is_search_match) {
-                    attroff(COLOR_PAIR(12) | A_BOLD);
-                }
-            }
-            
-            if (text_pos < len && text[text_pos] == '\n') {
-                text_pos++;
-            }
-            
-            display_line++;
-            y++;
-        }
-        
-        // Calculate cursor position
-        int cursor_line = 1;
-        int cursor_col = 0;
-        for (int i = 0; i < pos; i++) {
-            if (text[i] == '\n') {
-                cursor_line++;
-                cursor_col = 0;
-            } else if (text[i] == '\t') {
-                cursor_col += TAB_SIZE - (cursor_col % TAB_SIZE);
-            } else {
-                cursor_col++;
-            }
-        }
-        
-        // Status bar
-        attron(COLOR_PAIR(11));
-        move(LINES - 1, 0);
-        for (int i = 0; i < COLS; i++) addch(' ');
-        
-        char status[512];
-        snprintf(status, sizeof(status), " Line %d/%d  Col %d  Words %d  %s", 
-                 cursor_line, count_lines(text, len), cursor_col + 1, 
-                 count_words(text), modified ? "*" : "");
-        mvprintw(LINES - 1, 2, "%s", status);
-        
-        if (COLS > 60) {
-            mvprintw(LINES - 1, COLS - 60, "^S Save  ^O Open  ^F Find  ^L Theme  ^D Dup  ^X Exit");
-        }
-        attroff(COLOR_PAIR(11));
-        
-        // Position cursor
-        int screen_y = cursor_line - scroll_offset;
-        int screen_x = LINE_NUM_WIDTH + cursor_col;
-        
-        if (screen_y >= 1 && screen_y < LINES - 1 && screen_x >= LINE_NUM_WIDTH && screen_x < COLS) {
-            move(screen_y, screen_x);
-        }
-        refresh();
-        
-        ch = getch();
-                
+        int ch = getch();
         switch (ch) {
-            case CTRL_S:
-                {
-                    char temp_filename[512];
-                    if (strlen(current_filename) == 0) {
-                        if (get_filename_input(temp_filename, sizeof(temp_filename), "Save as")) {
-                            strcpy(current_filename, temp_filename);
-                        } else {
-                            show_message("Save cancelled", 1000);
-                            break;
-                        }
-                    } else {
-                        strcpy(temp_filename, current_filename);
-                    }
-                    
-                    if (save_file(temp_filename, text)) {
-                        modified = 0;
-                        show_message("File saved", 1000);
-                    } else {
-                        show_message("Error saving file", 2000);
-                    }
-                }
+            case KEY_F(1):
+                save_file(&editor);
                 break;
-                
-            case CTRL_N:
-                if (modified) {
-                    show_message("File modified! Press ^N again to discard changes", 0);
-                    refresh();
-                    int confirm = getch();
-                    if (confirm != CTRL_N) break;
-                }
-                text[0] = '\0';
-                len = 0;
-                pos = 0;
-                scroll_offset = 0;
-                current_filename[0] = '\0';
-                modified = 0;
-                show_message("New file created", 1000);
+            case KEY_F(2):
+                load_file(&editor);
                 break;
-                
-            case CTRL_O:
-                {
-                    if (modified) {
-                        show_message("File modified! Press ^O again to discard changes", 0);
-                        refresh();
-                        int confirm = getch();
-                        if (confirm != CTRL_O) break;
-                    }
-                    
-                    char filename[512];
-                    if (get_filename_input(filename, sizeof(filename), "Open file")) {
-                        int new_len = load_file(filename, text, MAX_TEXT);
-                        if (new_len >= 0) {
-                            len = new_len;
-                            pos = 0;
-                            scroll_offset = 0;
-                            strcpy(current_filename, filename);
-                            modified = 0;
-                            show_message("File loaded", 1000);
-                        } else {
-                            show_message("Error loading file", 2000);
-                        }
-                    } else {
-                        show_message("Open cancelled", 1000);
-                    }
-                }
+            case KEY_F(3):
+                show_about();
+                // Reset bkgd after show_about returns
+                bkgd(COLOR_PAIR(9));
                 break;
-                
-            case CTRL_X:
-                if (modified) {
-                    show_message("File modified! Press ^X again to exit without saving", 0);
-                    refresh();
-                    int confirm = getch();
-                    if (confirm == CTRL_X) running = 0;
-                } else {
-                    running = 0;
-                }
+            case KEY_F(4):
+                find_text(&editor);
+                // Reset bkgd after find_text returns
+                bkgd(COLOR_PAIR(9));
                 break;
-                
-            case CTRL_L:
-                dark_theme = 1 - dark_theme;
-                init_color_scheme(dark_theme);
-                show_message(dark_theme ? "Dark Theme Activated" : "Light Theme Activated", 1000);
+            case KEY_F(10):
+                running = 0;
                 break;
-                
-            case CTRL_F:
-                {
-                    echo();
-                    curs_set(1);
-                    attron(COLOR_PAIR(11) | A_BOLD);
-                    mvprintw(LINES - 1, 0, " Search: ");
-                    clrtoeol();
-                    attroff(COLOR_PAIR(11) | A_BOLD);
-                    refresh();
-                    
-                    search_term[0] = '\0';
-                    getnstr(search_term, sizeof(search_term) - 1);
-                    
-                    noecho();
-                    curs_set(1);
-                    
-                    search_highlight_pos = search_text(text, len, search_term, pos);
-                    if (search_highlight_pos != -1) {
-                        int current_pos_backup = pos;
-                        pos = search_highlight_pos; // Move cursor to highlight position for scrolling calculation
-                        
-                        // Recalculate cursor line to ensure screen scrolls to show the match
-                        int match_line = 1;
-                        for (int i = 0; i < pos; i++) {
-                            if (text[i] == '\n') match_line++;
-                        }
-                        
-                        // Force scroll_offset adjustment
-                        if (match_line < scroll_offset + 1 || match_line > scroll_offset + (LINES - 3)) {
-                            scroll_offset = match_line - (LINES - 3) / 2;
-                            if (scroll_offset < 0) scroll_offset = 0;
-                        }
-                        
-                        pos = current_pos_backup; // Restore original cursor position (if not moving)
-                        show_message("First match found (Ctrl+G to next)", 2000);
-                    } else {
-                        search_highlight_pos = -1;
-                        search_term[0] = '\0';
-                        show_message("Search term not found", 2000);
-                    }
-                }
-                break;
-                
-            case CTRL_G:
-                {
-                    if (search_term[0]) {
-                        int start_search_pos = search_highlight_pos + 1;
-                        if (start_search_pos > len) start_search_pos = 0;
-                        
-                        int next_match = search_text(text, len, search_term, start_search_pos);
-                        if (next_match != -1) {
-                            search_highlight_pos = next_match;
-                            int current_pos_backup = pos;
-                            pos = search_highlight_pos;
-                            
-                            int match_line = 1;
-                            for (int i = 0; i < pos; i++) {
-                                if (text[i] == '\n') match_line++;
-                            }
-                            
-                            if (match_line < scroll_offset + 1 || match_line > scroll_offset + (LINES - 3)) {
-                                scroll_offset = match_line - (LINES - 3) / 2;
-                                if (scroll_offset < 0) scroll_offset = 0;
-                            }
-                            
-                            pos = current_pos_backup;
-                            show_message("Next match found", 1000);
-                        } else {
-                            show_message("No more matches found", 2000);
-                        }
-                    }
-                }
-                break;
-                
-            case CTRL_D:
-                duplicate_line(text, &len, &pos);
-                modified = 1;
-                break;
-                
-            case KEY_UP:
-                {
-                    if (pos == 0) break;
-                    
-                    int line_start = pos;
-                    while (line_start > 0 && text[line_start-1] != '\n') line_start--;
-                    
-                    if (line_start == 0) {
-                        pos = 0;
-                    } else {
-                        int prev_line_end = line_start - 1;
-                        int prev_line_start = prev_line_end;
-                        while (prev_line_start > 0 && text[prev_line_start-1] != '\n') prev_line_start--;
-                        
-                        int col = 0;
-                        for (int i = line_start; i < pos; i++) {
-                            if (text[i] == '\t') col += TAB_SIZE - (col % TAB_SIZE);
-                            else col++;
-                        }
-                        
-                        int prev_col = 0;
-                        int target_pos = prev_line_start;
-                        for (int i = prev_line_start; i < prev_line_end; i++) {
-                            int next_col = prev_col;
-                            if (text[i] == '\t') next_col += TAB_SIZE - (next_col % TAB_SIZE);
-                            else next_col++;
-                            
-                            if (next_col > col) break;
-                            
-                            prev_col = next_col;
-                            target_pos = i + 1;
-                        }
-                        pos = target_pos;
-                    }
-                }
-                break;
-                
-            case KEY_DOWN:
-                {
-                    int line_end = pos;
-                    while (line_end < len && text[line_end] != '\n') line_end++;
-                    
-                    if (line_end == len) break;
-                    
-                    int line_start = pos;
-                    while (line_start > 0 && text[line_start-1] != '\n') line_start--;
-                    
-                    int col = 0;
-                    for (int i = line_start; i < pos; i++) {
-                        if (text[i] == '\t') col += TAB_SIZE - (col % TAB_SIZE);
-                        else col++;
-                    }
-                    
-                    int next_line_start = line_end + 1;
-                    int next_line_end = next_line_start;
-                    while (next_line_end < len && text[next_line_end] != '\n') next_line_end++;
-                    
-                    int next_col = 0;
-                    int target_pos = next_line_start;
-                    for (int i = next_line_start; i < next_line_end; i++) {
-                        int current_col_view = next_col;
-                        if (text[i] == '\t') current_col_view += TAB_SIZE - (current_col_view % TAB_SIZE);
-                        else current_col_view++;
-                        
-                        if (current_col_view > col) break;
-                        
-                        next_col = current_col_view;
-                        target_pos = i + 1;
-                    }
-                    pos = target_pos;
-                }
-                break;
-                
-            case KEY_LEFT:
-                if (pos > 0) pos--;
-                break;
-                
-            case KEY_RIGHT:
-                if (pos < len) pos++;
-                break;
-                
-            case KEY_HOME:
-                {
-                    int line_start = pos;
-                    while (line_start > 0 && text[line_start-1] != '\n') line_start--;
-                    pos = line_start;
-                }
-                break;
-                
-            case KEY_END:
-                {
-                    int line_end = pos;
-                    while (line_end < len && text[line_end] != '\n') line_end++;
-                    pos = line_end;
-                }
-                break;
-                
-            case '\t':
-                if (len + TAB_SIZE < MAX_TEXT) {
-                    memmove(&text[pos + TAB_SIZE], &text[pos], len - pos + 1);
-                    for (int i = 0; i < TAB_SIZE; i++) {
-                        text[pos + i] = ' ';
-                    }
-                    pos += TAB_SIZE;
-                    len += TAB_SIZE;
-                    modified = 1;
-                }
-                break;
-                
             case '\n':
-            case '\r':
-                {
-                    if (len < MAX_TEXT - 1) {
-                        int line_start = pos;
-                        while (line_start > 0 && text[line_start-1] != '\n') line_start--;
-                        
-                        int indentation = 0;
-                        for (int i = line_start; i < pos; i++) {
-                            if (text[i] == ' ' || text[i] == '\t') {
-                                indentation++;
-                            } else {
-                                indentation = 0;
-                            }
-                        }
-                        
-                        // Insert newline
-                        memmove(&text[pos + 1], &text[pos], len - pos + 1);
-                        text[pos] = '\n';
-                        len++;
-                        pos++;
-                        
-                        // Insert auto-indentation
-                        if (len + indentation < MAX_TEXT) {
-                            memmove(&text[pos + indentation], &text[pos], len - pos + 1);
-                            for (int i = 0; i < indentation; i++) {
-                                text[pos + i] = ' ';
-                            }
-                            pos += indentation;
-                            len += indentation;
-                        }
-                        
-                        modified = 1;
-                    }
-                }
+                new_line(&editor);
                 break;
-                
-            case 127: // Backspace
             case KEY_BACKSPACE:
-            case CTRL_H:
-                if (pos > 0) {
-                    if (pos >= TAB_SIZE && strncmp(&text[pos - TAB_SIZE], "    ", TAB_SIZE) == 0) {
-                         // Tab deletion (4 spaces)
-                        memmove(&text[pos - TAB_SIZE], &text[pos], len - pos + 1);
-                        pos -= TAB_SIZE;
-                        len -= TAB_SIZE;
-                    } else {
-                        // Single char deletion
-                        memmove(&text[pos - 1], &text[pos], len - pos + 1);
-                        pos--;
-                        len--;
-                    }
-                    modified = 1;
+            case 127:
+                delete_char(&editor);
+                break;
+            case '\t':
+                handle_tab(&editor);
+                break;
+            case 1: // Ctrl+A - Toggle auto-indent
+                editor.auto_indent = !editor.auto_indent;
+                break;
+            case 12: // Ctrl+L - Toggle line highlight
+                editor.highlight_current_line = !editor.highlight_current_line;
+                break;
+            case KEY_UP:
+                if (editor.cursor_y > 0) editor.cursor_y--;
+                if (editor.cursor_x > strlen(editor.lines[editor.cursor_y])) {
+                    editor.cursor_x = strlen(editor.lines[editor.cursor_y]);
                 }
                 break;
-                
-            case KEY_DC: // Delete
-                if (pos < len) {
-                    memmove(&text[pos], &text[pos + 1], len - pos);
-                    len--;
-                    modified = 1;
+            case KEY_DOWN:
+                if (editor.cursor_y < editor.line_count - 1) editor.cursor_y++;
+                if (editor.cursor_x > strlen(editor.lines[editor.cursor_y])) {
+                    editor.cursor_x = strlen(editor.lines[editor.cursor_y]);
                 }
                 break;
-                
+            case KEY_LEFT:
+                if (editor.cursor_x > 0) editor.cursor_x--;
+                else if (editor.cursor_y > 0) {
+                    editor.cursor_y--;
+                    editor.cursor_x = strlen(editor.lines[editor.cursor_y]);
+                }
+                break;
+            case KEY_RIGHT:
+                if (editor.cursor_x < strlen(editor.lines[editor.cursor_y])) editor.cursor_x++;
+                else if (editor.cursor_y < editor.line_count - 1) {
+                    editor.cursor_y++;
+                    editor.cursor_x = 0;
+                }
+                break;
+            case KEY_SRIGHT: // Ctrl+Right
+                move_to_next_word(&editor, 1);
+                break;
+            case KEY_SLEFT: // Ctrl+Left
+                move_to_next_word(&editor, -1);
+                break;
+            case KEY_HOME:
+                editor.cursor_x = 0;
+                break;
+            case KEY_END:
+                editor.cursor_x = strlen(editor.lines[editor.cursor_y]);
+                break;
+            case KEY_PPAGE: // Page Up
+                editor.scroll_offset = (editor.scroll_offset > LINES - 2) ? editor.scroll_offset - (LINES - 2) : 0;
+                editor.cursor_y = (editor.cursor_y > LINES - 2) ? editor.cursor_y - (LINES - 2) : 0;
+                if (editor.cursor_x > strlen(editor.lines[editor.cursor_y])) {
+                    editor.cursor_x = strlen(editor.lines[editor.cursor_y]);
+                }
+                break;
+            case KEY_NPAGE: // Page Down
+                editor.scroll_offset += (LINES - 2);
+                if (editor.scroll_offset > editor.line_count - (LINES - 2)) {
+                    editor.scroll_offset = editor.line_count - (LINES - 2);
+                    if (editor.scroll_offset < 0) editor.scroll_offset = 0;
+                }
+                editor.cursor_y += (LINES - 2);
+                if (editor.cursor_y >= editor.line_count) editor.cursor_y = editor.line_count - 1;
+                if (editor.cursor_y < 0) editor.cursor_y = 0;
+                if (editor.cursor_x > strlen(editor.lines[editor.cursor_y])) {
+                    editor.cursor_x = strlen(editor.lines[editor.cursor_y]);
+                }
+                break;
+            // Bracket/Quote Auto-completion
+            case '(':
+                auto_complete(&editor, '(', ')');
+                break;
+            case '[':
+                auto_complete(&editor, '[', ']');
+                break;
+            case '{':
+                // Special handling for new line after {
+                insert_char(&editor, '{');
+                new_line(&editor);
+                // Move back one indent level to place the closing brace '}' on its own line
+                for (int i = 0; i < TAB_SIZE; i++) {
+                    delete_char(&editor);
+                }
+                // Add closing brace '}'
+                insert_char(&editor, '}');
+                editor.cursor_x = 0; // Go to start of line
+                // Go up one line to the indented spot
+                editor.cursor_y--;
+                int indent_level = get_auto_indent_level(&editor);
+                editor.cursor_x = indent_level;
+                break;
+            case '"':
+                auto_complete(&editor, '"', '"');
+                break;
+            case '\'':
+                auto_complete(&editor, '\'', '\'');
+                break;
             default:
-                if (isprint(ch) && len < MAX_TEXT - 1) {
-                    memmove(&text[pos + 1], &text[pos], len - pos + 1);
-                    text[pos] = (char)ch;
-                    pos++;
-                    len++;
-                    modified = 1;
-                    
+                if (isprint(ch)) {
+                    insert_char(&editor, ch);
                 }
                 break;
+        }
+        
+        // Ensure cursor Y stays visible
+        if (editor.cursor_y < editor.scroll_offset) {
+            editor.scroll_offset = editor.cursor_y;
+        }
+        if (editor.cursor_y >= editor.scroll_offset + LINES - 2) {
+            editor.scroll_offset = editor.cursor_y - (LINES - 3);
         }
     }
     
+    // Clean up ncurses
     endwin();
     return 0;
 }
