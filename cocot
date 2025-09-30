@@ -1,8 +1,7 @@
-////////////////////////////////////////////////////////////////////////////////////////////////
-//COCOT - Simple Code Editor for C Language with Syntax Highlighting, 17.9.2025, Karel Resl
-//ctlr+s, save, ctrl+o open, ctrl+n, new
-//Compilation for Linux: gcc cocot.c -o cocot -lncurses
-////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+//COCOT - C Code Editor, Designed by Karel Resl, 30.09.2025
+//Compilation: gcc cocot.c -o cocot -lncurses
+////////////////////////////////////////////////////////////
 
 #define _GNU_SOURCE
 #include <ncurses.h>
@@ -14,37 +13,89 @@
 #include <pwd.h>
 
 #define MAX_TEXT 50000
-#define STATUS_ATTR A_REVERSE
 #define TAB_SIZE 4
 #define LINE_NUM_WIDTH 6
 
-// Přímé definice ASCII hodnot pro Ctrl klávesy
+
+// Control keys
 #define CTRL_S 19
 #define CTRL_N 14
 #define CTRL_O 15
 #define CTRL_X 24
 #define CTRL_Q 17
+#define CTRL_F 6
+#define CTRL_G 7
+#define CTRL_H 8
+#define CTRL_D 4
+#define CTRL_Z 26
+#define CTRL_L 12
 
 char current_filename[512] = "";
-int modified = 0;  // Sledování změn v souboru
+int modified = 0;
+char search_term[256] = "";
+int search_highlight_pos = -1;
+int dark_theme = 1;
 
-// Klíčová slova jazyka C
+
+// Enhanced C keywords
 const char *c_keywords[] = {
     "auto", "break", "case", "char", "const", "continue", "default", "do", 
     "double", "else", "enum", "extern", "float", "for", "goto", "if", 
     "int", "long", "register", "return", "short", "signed", "sizeof", "static", 
-    "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while"
+    "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while",
+    "bool", "true", "false", "NULL", "_Bool", "_Complex", "_Imaginary",
+    "inline", "restrict", "_Alignas", "_Alignof", "_Atomic", "_Generic", "_Noreturn",
+    "_Static_assert", "_Thread_local"
 };
-const int num_keywords = 32;
+const int num_keywords = 48;
 
-// Preprocesorové direktivy
+// Preprocessor directives
 const char *preprocessor_directives[] = {
     "#include", "#define", "#ifdef", "#ifndef", "#if", "#else", "#elif", "#endif", 
     "#undef", "#pragma", "#error", "#warning", "#line"
 };
 const int num_directives = 13;
 
-// Funkce pro kontrolu, zda je slovo klíčové
+// Common C functions
+const char *c_functions[] = {
+    "printf", "scanf", "malloc", "free", "calloc", "realloc", "strlen", "strcpy", 
+    "strcmp", "strcat", "strncpy", "strncmp", "strncat", "memset", "memcpy",
+    "memmove", "memcmp", "strchr", "strrchr", "strstr", "strtok", "atoi", "atof",
+    "atol", "atoll", "fopen", "fclose", "fread", "fwrite", "fprintf", "fscanf",
+    "fgets", "fputs", "getchar", "putchar", "gets", "puts", "sprintf", "sscanf",
+    "exit", "abort", "system", "qsort", "bsearch", "time", "clock", "rand", "srand"
+};
+const int num_functions = 48;
+
+// Common C types and structures
+const char *c_types[] = {
+    "size_t", "ssize_t", "FILE", "NULL", "stdin", "stdout", "stderr",
+    "uint8_t", "uint16_t", "uint32_t", "uint64_t", "int8_t", "int16_t", "int32_t", "int64_t",
+    "intptr_t", "uintptr_t", "ptrdiff_t", "clock_t", "time_t", "wchar_t",
+    "intmax_t", "uintmax_t", "int_fast8_t", "int_fast16_t", "int_fast32_t", "int_fast64_t",
+    "uint_fast8_t", "uint_fast16_t", "uint_fast32_t", "uint_fast64_t"
+};
+const int num_types = 32;
+
+// C standard library headers
+const char *c_headers[] = {
+    "stdio.h", "stdlib.h", "string.h", "ctype.h", "math.h", "time.h",
+    "unistd.h", "fcntl.h", "sys/types.h", "sys/stat.h", "dirent.h",
+    "errno.h", "signal.h", "setjmp.h", "assert.h", "limits.h", "float.h",
+    "stddef.h", "locale.h", "wchar.h", "wctype.h", "stdarg.h", "stdbool.h",
+    "stdint.h", "inttypes.h", "tgmath.h", "complex.h", "fenv.h", "stdalign.h",
+    "stdatomic.h", "stdnoreturn.h", "threads.h", "uchar.h"
+};
+const int num_headers = 33;
+
+// Common C macros and constants
+const char *c_macros[] = {
+    "NULL", "EOF", "BUFSIZ", "FILENAME_MAX", "FOPEN_MAX", "L_tmpnam",
+    "SEEK_CUR", "SEEK_END", "SEEK_SET", "TMP_MAX", "stdin", "stdout", "stderr",
+    "EXIT_SUCCESS", "EXIT_FAILURE", "RAND_MAX", "MB_CUR_MAX"
+};
+const int num_macros = 17;
+
 int is_keyword(const char *word, int length) {
     for (int i = 0; i < num_keywords; i++) {
         if (strlen(c_keywords[i]) == length && 
@@ -55,19 +106,25 @@ int is_keyword(const char *word, int length) {
     return 0;
 }
 
-// Funkce pro kontrolu preprocesorové direktivy
+int is_function(const char *word, int length) {
+    for (int i = 0; i < num_functions; i++) {
+        if (strlen(c_functions[i]) == length && 
+            strncmp(word, c_functions[i], length) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int is_directive(const char *line_start) {
-    // Přeskočení počátečních mezer
     while (*line_start == ' ' || *line_start == '\t') {
         line_start++;
     }
     
-    // Kontrola, zda řádek začíná '#'
     if (*line_start != '#') {
         return 0;
     }
     
-    // Získání direktivy (od '#' do prvního mezerníku nebo konce řádku)
     const char *directive_start = line_start + 1;
     const char *directive_end = directive_start;
     while (*directive_end && !isspace(*directive_end) && *directive_end != '\n') {
@@ -87,10 +144,7 @@ int is_directive(const char *line_start) {
 
 int count_words(const char *text) {
     if (!text || !*text) return 0;
-    
-    int count = 0;
-    int in_word = 0;
-    
+    int count = 0, in_word = 0;
     for (int i = 0; text[i]; i++) {
         if (isspace(text[i])) {
             in_word = 0;
@@ -114,7 +168,6 @@ int count_lines(const char *text, int len) {
 int save_file(const char *filename, const char *text) {
     FILE *f = fopen(filename, "w");
     if (!f) return 0;
-    
     fprintf(f, "%s", text);
     fclose(f);
     return 1;
@@ -123,7 +176,6 @@ int save_file(const char *filename, const char *text) {
 int load_file(const char *filename, char *text, int max_size) {
     FILE *f = fopen(filename, "r");
     if (!f) return 0;
-    
     int len = fread(text, 1, max_size - 1, f);
     text[len] = '\0';
     fclose(f);
@@ -131,10 +183,10 @@ int load_file(const char *filename, char *text, int max_size) {
 }
 
 void show_message(const char *message, int duration_ms) {
-    attron(STATUS_ATTR);
-    mvprintw(LINES - 1, 0, "%s", message);
+    attron(COLOR_PAIR(11) | A_BOLD);
+    mvprintw(LINES - 1, 0, " %s", message);
     clrtoeol();
-    attroff(STATUS_ATTR);
+    attroff(COLOR_PAIR(11) | A_BOLD);
     refresh();
     if (duration_ms > 0) {
         napms(duration_ms);
@@ -142,44 +194,32 @@ void show_message(const char *message, int duration_ms) {
 }
 
 int get_filename_input(char *filename, int max_len, const char *prompt) {
-    // Dočasné povolení echo a kurzoru
     echo();
     curs_set(1);
     
-    // Vymazání obrazovky a zobrazení dialogu
-    clear();
-    refresh();
-    
-    // Získání domovského adresáře
     char *home_dir = getenv("HOME");
     if (!home_dir) {
         struct passwd *pw = getpwuid(getuid());
         home_dir = pw ? pw->pw_dir : "/tmp";
     }
     
-    // Zobrazení dialogu
-    attron(A_BOLD | COLOR_PAIR(3));
-    mvprintw(LINES/2 - 3, 5, "=== %s ===", prompt);
-    attroff(A_BOLD | COLOR_PAIR(3));
-    
-    mvprintw(LINES/2 - 1, 5, "Home directory: %s", home_dir);
-    
-    attron(A_BOLD);
-    mvprintw(LINES/2 + 1, 5, "Enter filename (without .c extension): ");
-    attroff(A_BOLD);
+    attron(COLOR_PAIR(11) | A_BOLD);
+    mvprintw(LINES - 1, 0, " %s: ", prompt);
+    clrtoeol();
+    attroff(COLOR_PAIR(11) | A_BOLD);
     refresh();
     
-    // Získání vstupu
     char basename[200] = "";
-    if (getnstr(basename, sizeof(basename) - 1) == ERR) {
-        noecho();
-        curs_set(1);
+    int result = getnstr(basename, sizeof(basename) - 1);
+    
+    noecho();
+    curs_set(1);
+    
+    if (result == ERR) {
         return 0;
     }
     
-    // Vytvoření celé cesty
     if (strlen(basename) > 0) {
-        // Odstranění přípony .c, pokud ji uživatel přidal
         char *dot = strrchr(basename, '.');
         if (dot && strcmp(dot, ".c") == 0) {
             *dot = '\0';
@@ -189,25 +229,77 @@ int get_filename_input(char *filename, int max_len, const char *prompt) {
         snprintf(filename, max_len, "%s/untitled.c", home_dir);
     }
     
-    // Zobrazení potvrzení pro operace ukládání
-    if (strstr(prompt, "SAVE")) {
-        mvprintw(LINES/2 + 3, 5, "File will be saved as: %s", filename);
-        attron(A_BOLD | COLOR_PAIR(3));
-        mvprintw(LINES/2 + 5, 5, "Continue? (y/n): ");
-        attroff(A_BOLD | COLOR_PAIR(3));
-        refresh();
-        
-        int confirm = getch();
-        if (confirm != 'y' && confirm != 'Y') {
-            noecho();
-            curs_set(1);
-            return 0;
+    return 1;
+}
+
+int search_text(const char *text, int len, const char *search, int start_pos) {
+    if (!search || !*search) return -1;
+    
+    int search_len = strlen(search);
+    for (int i = start_pos; i <= len - search_len; i++) {
+        if (strncmp(&text[i], search, search_len) == 0) {
+            return i;
         }
     }
+    return -1;
+}
+
+void duplicate_line(char *text, int *len, int *pos) {
+    if (*len >= MAX_TEXT - 100) return;
     
-    noecho();
-    curs_set(1);
-    return 1;
+    int line_start = *pos;
+    while (line_start > 0 && text[line_start-1] != '\n') line_start--;
+    
+    int line_end = *pos;
+    while (line_end < *len && text[line_end] != '\n') line_end++;
+    
+    int line_length = line_end - line_start;
+    
+    if (*len + line_length + 1 < MAX_TEXT) {
+        memmove(&text[line_end + line_length + 1], &text[line_end], *len - line_end + 1);
+        text[line_end] = '\n';
+        memcpy(&text[line_end + 1], &text[line_start], line_length);
+        *len += line_length + 1;
+        *pos = line_end + line_length + 1;
+    }
+}
+
+void init_color_scheme(int dark_mode) {
+    if (!has_colors()) return;
+    
+    if (dark_mode) {
+        // Dark theme (Blue Design)
+        init_pair(1, COLOR_WHITE, COLOR_BLACK);      // Default text
+        init_pair(2, COLOR_CYAN, COLOR_BLACK);      // Line numbers
+        init_pair(3, COLOR_MAGENTA, COLOR_BLACK);    // Keywords
+        init_pair(4, COLOR_GREEN, COLOR_BLACK);      // Strings
+        init_pair(5, COLOR_YELLOW, COLOR_BLACK);     // Preprocessor
+        init_pair(6, COLOR_CYAN, COLOR_BLACK);       // Functions
+        init_pair(7, COLOR_RED, COLOR_BLACK);        // Numbers
+        init_pair(8, COLOR_BLUE, COLOR_BLACK);       // Comments
+        init_pair(9, COLOR_WHITE, COLOR_BLACK);      // Operators
+        init_pair(10, COLOR_YELLOW, COLOR_BLACK);    // Types
+        init_pair(11, COLOR_WHITE, COLOR_BLUE);      // Status bar (The main blue color)
+        init_pair(12, COLOR_BLACK, COLOR_YELLOW);    // Search highlight
+        // Autocomplete color pairs (13 and 14) removed
+    } else {
+        // Light theme (Kept but not default)
+        init_pair(1, COLOR_BLACK, COLOR_WHITE);      // Default text
+        init_pair(2, COLOR_BLUE, COLOR_WHITE);       // Line numbers
+        init_pair(3, COLOR_RED, COLOR_WHITE);        // Keywords
+        init_pair(4, COLOR_GREEN, COLOR_WHITE);      // Strings
+        init_pair(5, COLOR_MAGENTA, COLOR_WHITE);    // Preprocessor
+        init_pair(6, COLOR_BLUE, COLOR_WHITE);       // Functions
+        init_pair(7, COLOR_RED, COLOR_WHITE);        // Numbers
+        init_pair(8, COLOR_BLUE, COLOR_WHITE);       // Comments
+        init_pair(9, COLOR_BLACK, COLOR_WHITE);      // Operators
+        init_pair(10, COLOR_MAGENTA, COLOR_WHITE);   // Types
+        init_pair(11, COLOR_BLACK, COLOR_CYAN);      // Status bar
+        init_pair(12, COLOR_WHITE, COLOR_RED);       // Search highlight
+        
+    }
+    
+    bkgd(COLOR_PAIR(1));
 }
 
 int main() {
@@ -218,56 +310,43 @@ int main() {
     int running = 1;
     int scroll_offset = 0;
     
-    // Inicializace ncurses
     initscr();
-    raw();  // Použijeme raw() místo cbreak() pro lepší zacházení s Ctrl klávesami
+    raw();
     noecho();
     keypad(stdscr, TRUE);
     curs_set(1);
     
-    // Povolení speciálních kláves
-    nonl();
-    intrflush(stdscr, FALSE);
-    
-    // Barevné schéma
     if (has_colors()) {
         start_color();
-        init_pair(1, COLOR_GREEN, COLOR_BLACK);    // hlavní text
-        init_pair(2, COLOR_CYAN, COLOR_BLACK);     // čísla řádků
-        init_pair(3, COLOR_YELLOW, COLOR_BLACK);   // stav/hlavičky
-        init_pair(4, COLOR_WHITE, COLOR_BLACK);    // normální text
-        init_pair(5, COLOR_MAGENTA, COLOR_BLACK);  // klíčová slova
-        init_pair(6, COLOR_BLUE, COLOR_BLACK);     // preprocesorové direktivy
-        init_pair(7, COLOR_RED, COLOR_BLACK);      // čísla
-        bkgd(COLOR_PAIR(4));
+        use_default_colors();
+        init_color_scheme(dark_theme);
     }
     
     clear();
     refresh();
     
-    // Hlavní editační smyčka
     while (running) {
         erase();
         
-        // Zobrazení hlavičky
-        attron(A_BOLD | COLOR_PAIR(3));
+        // Header
+        attron(COLOR_PAIR(11));
+        move(0, 0);
+        for (int i = 0; i < COLS; i++) addch(' ');
+        
         if (strlen(current_filename) > 0) {
             char *basename = strrchr(current_filename, '/');
             basename = basename ? basename + 1 : current_filename;
-            mvprintw(0, 0, "C Editor - %s%s", basename, modified ? " *" : "");
+            mvprintw(0, 2, "%s%s", basename, modified ? " *" : "");
         } else {
-            mvprintw(0, 0, "C Editor - New File%s", modified ? " *" : "");
+            mvprintw(0, 2, "untitled%s", modified ? " *" : "");
         }
-        clrtoeol();
-        attroff(A_BOLD | COLOR_PAIR(3));
+        attroff(COLOR_PAIR(11));
         
-        // Výpočet aktuálního řádku kurzoru
         int current_line = 1;
         for (int i = 0; i < pos; i++) {
             if (text[i] == '\n') current_line++;
         }
         
-        // Automatické posouvání
         int visible_lines = LINES - 3;
         if (current_line < scroll_offset + 1) {
             scroll_offset = current_line - 1;
@@ -276,25 +355,27 @@ int main() {
         }
         if (scroll_offset < 0) scroll_offset = 0;
         
-        // Zobrazení textu s čísly řádků
+        // Display text 
         int display_line = 1;
         int y = 1;
         int text_pos = 0;
         
-        // Přeskočení řádků před scroll_offset
         while (text_pos < len && display_line <= scroll_offset) {
             if (text[text_pos] == '\n') display_line++;
             text_pos++;
         }
         
-        // Zobrazení viditelných řádků
         while (y < LINES - 1 && text_pos <= len && display_line <= scroll_offset + visible_lines) {
-            // Číslo řádku
             attron(COLOR_PAIR(2));
-            mvprintw(y, 0, "%5d ", display_line);
+            if (display_line == current_line) {
+                attron(A_BOLD);
+                mvprintw(y, 0, " %4d ", display_line);
+                attroff(A_BOLD);
+            } else {
+                mvprintw(y, 0, " %4d ", display_line);
+            }
             attroff(COLOR_PAIR(2));
             
-            // Obsah řádku
             int x = LINE_NUM_WIDTH;
             int line_start = text_pos;
             int in_comment = 0;
@@ -303,7 +384,12 @@ int main() {
             char string_char = 0;
             
             while (text_pos < len && text[text_pos] != '\n' && x < COLS - 1) {
-                // Zpracování znaků
+                int is_search_match = 0;
+                if (search_term[0] && text_pos == search_highlight_pos) {
+                    is_search_match = 1;
+                    attron(COLOR_PAIR(12) | A_BOLD);
+                }
+                
                 if (text[text_pos] == '\t') {
                     int spaces = TAB_SIZE - ((x - LINE_NUM_WIDTH) % TAB_SIZE);
                     for (int i = 0; i < spaces && x < COLS - 1; i++) {
@@ -311,22 +397,26 @@ int main() {
                     }
                     text_pos++;
                 } else {
-                    // Kontrola řetězců a znaků
                     if (!in_comment && !in_string && !in_char) {
                         if (text[text_pos] == '"') {
                             in_string = 1;
                             string_char = '"';
-                            attron(COLOR_PAIR(7)); // Červená pro řetězce
+                            attron(COLOR_PAIR(4));
+                            mvaddch(y, x++, text[text_pos]);
+                            text_pos++;
+                            continue;
                         } else if (text[text_pos] == '\'') {
                             in_char = 1;
                             string_char = '\'';
-                            attron(COLOR_PAIR(7)); // Červená pro znaky
+                            attron(COLOR_PAIR(4));
+                            mvaddch(y, x++, text[text_pos]);
+                            text_pos++;
+                            continue;
                         } else if (text_pos + 1 < len && text[text_pos] == '/' && text[text_pos + 1] == '*') {
                             in_comment = 1;
-                            attron(COLOR_PAIR(2)); // Cyan pro komentáře
+                            attron(COLOR_PAIR(8) | A_DIM);
                         } else if (text_pos + 1 < len && text[text_pos] == '/' && text[text_pos + 1] == '/') {
-                            // Řádkový komentář - zbytek řádku bude cyan
-                            attron(COLOR_PAIR(2));
+                            attron(COLOR_PAIR(8) | A_DIM);
                             while (text_pos < len && text[text_pos] != '\n' && x < COLS - 1) {
                                 if (text[text_pos] == '\t') {
                                     int spaces = TAB_SIZE - ((x - LINE_NUM_WIDTH) % TAB_SIZE);
@@ -338,11 +428,10 @@ int main() {
                                 }
                                 text_pos++;
                             }
-                            attroff(COLOR_PAIR(2));
+                            attroff(COLOR_PAIR(8) | A_DIM);
                             continue;
                         } else if (is_directive(&text[line_start])) {
-                            // Preprocesorová direktiva
-                            attron(COLOR_PAIR(6)); // Modrá pro direktivy
+                            attron(COLOR_PAIR(5));
                             while (text_pos < len && text[text_pos] != '\n' && x < COLS - 1) {
                                 if (text[text_pos] == '\t') {
                                     int spaces = TAB_SIZE - ((x - LINE_NUM_WIDTH) % TAB_SIZE);
@@ -354,79 +443,91 @@ int main() {
                                 }
                                 text_pos++;
                             }
-                            attroff(COLOR_PAIR(6));
+                            attroff(COLOR_PAIR(5));
                             continue;
                         } else if (isalpha(text[text_pos]) || text[text_pos] == '_') {
-                            // Možné klíčové slovo
                             int word_start = text_pos;
                             while (text_pos < len && (isalnum(text[text_pos]) || text[text_pos] == '_')) {
                                 text_pos++;
                             }
                             int word_length = text_pos - word_start;
                             
+                            int color_pair = 1;
                             if (is_keyword(&text[word_start], word_length)) {
-                                // Klíčové slovo
-                                attron(COLOR_PAIR(5)); // Magenta pro klíčová slova
-                                for (int i = word_start; i < text_pos; i++) {
-                                    if (x < COLS - 1) {
-                                        mvaddch(y, x++, text[i]);
-                                    }
-                                }
-                                attroff(COLOR_PAIR(5));
+                                color_pair = 3;
+                            } else if (is_function(&text[word_start], word_length)) {
+                                color_pair = 6;
                             } else {
-                                // Běžný identifikátor
-                                attron(COLOR_PAIR(1)); // Zelená pro běžný text
-                                for (int i = word_start; i < text_pos; i++) {
-                                    if (x < COLS - 1) {
-                                        mvaddch(y, x++, text[i]);
-                                    }
-                                }
-                                attroff(COLOR_PAIR(1));
+                                color_pair = 1;
                             }
+                            
+                            attron(COLOR_PAIR(color_pair));
+                            for (int i = word_start; i < text_pos; i++) {
+                                if (x < COLS - 1) {
+                                    mvaddch(y, x++, text[i]);
+                                }
+                            }
+                            attroff(COLOR_PAIR(color_pair));
                             continue;
                         } else if (isdigit(text[text_pos])) {
-                            // Číslo
-                            attron(COLOR_PAIR(7)); // Červená pro čísla
+                            attron(COLOR_PAIR(7));
                             mvaddch(y, x++, text[text_pos]);
                             attroff(COLOR_PAIR(7));
                             text_pos++;
                             continue;
+                        } else if (strchr("+-*/%=<>!&|^~(){}[];:,.", text[text_pos])) {
+                            attron(COLOR_PAIR(9));
+                            mvaddch(y, x++, text[text_pos]);
+                            attroff(COLOR_PAIR(9));
+                            text_pos++;
+                            continue;
                         } else {
-                            // Obyčejný znak
-                            attron(COLOR_PAIR(1)); // Zelená pro běžný text
+                            attron(COLOR_PAIR(1));
                             mvaddch(y, x++, text[text_pos]);
                             attroff(COLOR_PAIR(1));
                             text_pos++;
                             continue;
                         }
                     } else if (in_comment) {
-                        // Uvnitř blokového komentáře
                         if (text_pos + 1 < len && text[text_pos] == '*' && text[text_pos + 1] == '/') {
                             mvaddch(y, x++, text[text_pos++]);
-                            mvaddch(y, x++, text[text_pos]);
+                            if (x < COLS - 1) {
+                                mvaddch(y, x++, text[text_pos]);
+                            }
                             in_comment = 0;
-                            attroff(COLOR_PAIR(2));
+                            attroff(COLOR_PAIR(8) | A_DIM);
                         } else {
                             mvaddch(y, x++, text[text_pos]);
                         }
+                        text_pos++;
+                        continue;
                     } else if (in_string || in_char) {
-                        // Uvnitř řetězce nebo znaku
                         if (text[text_pos] == '\\' && text_pos + 1 < len) {
-                            // Escape sekvence
                             mvaddch(y, x++, text[text_pos++]);
-                            mvaddch(y, x++, text[text_pos]);
+                            if (x < COLS - 1 && text_pos < len) {
+                                mvaddch(y, x++, text[text_pos]);
+                            }
+                            text_pos++;
+                            continue;
                         } else if (text[text_pos] == string_char) {
-                            // Konec řetězce/znaku
                             mvaddch(y, x++, text[text_pos]);
                             in_string = 0;
                             in_char = 0;
-                            attroff(COLOR_PAIR(7));
+                            attroff(COLOR_PAIR(4));
+                            text_pos++;
+                            continue;
                         } else {
                             mvaddch(y, x++, text[text_pos]);
+                            text_pos++;
+                            continue;
                         }
                     }
                     
                     text_pos++;
+                }
+                
+                if (is_search_match) {
+                    attroff(COLOR_PAIR(12) | A_BOLD);
                 }
             }
             
@@ -438,7 +539,7 @@ int main() {
             y++;
         }
         
-        // Výpočet pozice kurzoru
+        // Calculate cursor position
         int cursor_line = 1;
         int cursor_col = 0;
         for (int i = 0; i < pos; i++) {
@@ -452,14 +553,23 @@ int main() {
             }
         }
         
-        // Stavový řádek
-        attron(STATUS_ATTR);
-        mvprintw(LINES - 1, 0, "Line:%d/%d Col:%d Words:%d | ^S:Save ^N:New ^O:Open ^X:Exit", 
-                 cursor_line, count_lines(text, len), cursor_col + 1, count_words(text));
-        clrtoeol();
-        attroff(STATUS_ATTR);
+        // Status bar
+        attron(COLOR_PAIR(11));
+        move(LINES - 1, 0);
+        for (int i = 0; i < COLS; i++) addch(' ');
         
-        // Pozicování kurzoru na obrazovce
+        char status[512];
+        snprintf(status, sizeof(status), " Line %d/%d  Col %d  Words %d  %s", 
+                 cursor_line, count_lines(text, len), cursor_col + 1, 
+                 count_words(text), modified ? "*" : "");
+        mvprintw(LINES - 1, 2, "%s", status);
+        
+        if (COLS > 60) {
+            mvprintw(LINES - 1, COLS - 60, "^S Save  ^O Open  ^F Find  ^L Theme  ^D Dup  ^X Exit");
+        }
+        attroff(COLOR_PAIR(11));
+        
+        // Position cursor
         int screen_y = cursor_line - scroll_offset;
         int screen_x = LINE_NUM_WIDTH + cursor_col;
         
@@ -468,16 +578,14 @@ int main() {
         }
         refresh();
         
-        // Získání vstupu
         ch = getch();
-        
-        // Zpracování vstupu
+                
         switch (ch) {
-            case CTRL_S: // Uložit
+            case CTRL_S:
                 {
                     char temp_filename[512];
                     if (strlen(current_filename) == 0) {
-                        if (get_filename_input(temp_filename, sizeof(temp_filename), "SAVE FILE")) {
+                        if (get_filename_input(temp_filename, sizeof(temp_filename), "Save as")) {
                             strcpy(current_filename, temp_filename);
                         } else {
                             show_message("Save cancelled", 1000);
@@ -489,18 +597,16 @@ int main() {
                     
                     if (save_file(temp_filename, text)) {
                         modified = 0;
-                        char msg[600];
-                        snprintf(msg, sizeof(msg), "Saved: %s", temp_filename);
-                        show_message(msg, 1500);
+                        show_message("File saved", 1000);
                     } else {
-                        show_message("ERROR: Cannot save file!", 2000);
+                        show_message("Error saving file", 2000);
                     }
                 }
                 break;
                 
-            case CTRL_N: // Nový soubor
+            case CTRL_N:
                 if (modified) {
-                    show_message("File modified! Save first (^S) or press ^N again to create new file without saving", 0);
+                    show_message("File modified! Press ^N again to discard changes", 0);
                     refresh();
                     int confirm = getch();
                     if (confirm != CTRL_N) break;
@@ -514,17 +620,17 @@ int main() {
                 show_message("New file created", 1000);
                 break;
                 
-            case CTRL_O: // Otevřít soubor
+            case CTRL_O:
                 {
                     if (modified) {
-                        show_message("File modified! Save first (^S) or press ^O again to open without saving", 0);
+                        show_message("File modified! Press ^O again to discard changes", 0);
                         refresh();
                         int confirm = getch();
                         if (confirm != CTRL_O) break;
                     }
                     
                     char filename[512];
-                    if (get_filename_input(filename, sizeof(filename), "OPEN FILE")) {
+                    if (get_filename_input(filename, sizeof(filename), "Open file")) {
                         int new_len = load_file(filename, text, MAX_TEXT);
                         if (new_len >= 0) {
                             len = new_len;
@@ -532,76 +638,182 @@ int main() {
                             scroll_offset = 0;
                             strcpy(current_filename, filename);
                             modified = 0;
-                            char msg[600];
-                            snprintf(msg, sizeof(msg), "Loaded: %s", filename);
-                            show_message(msg, 1500);
+                            show_message("File loaded", 1000);
                         } else {
-                            // Vytvoření nového souboru
-                            len = 0;
-                            pos = 0;
-                            scroll_offset = 0;
-                            strcpy(current_filename, filename);
-                            modified = 0;
-                            char msg[600];
-                            snprintf(msg, sizeof(msg), "New file: %s", filename);
-                            show_message(msg, 1500);
+                            show_message("Error loading file", 2000);
                         }
+                    } else {
+                        show_message("Open cancelled", 1000);
                     }
                 }
                 break;
                 
-            case CTRL_X: // Ukončit
-            case CTRL_Q:
+            case CTRL_X:
                 if (modified) {
-                    show_message("File modified! Save first (^S) or press ^X again to quit without saving", 0);
+                    show_message("File modified! Press ^X again to exit without saving", 0);
                     refresh();
                     int confirm = getch();
-                    if (confirm == CTRL_X || confirm == CTRL_Q) {
-                        running = 0;
-                    }
+                    if (confirm == CTRL_X) running = 0;
                 } else {
                     running = 0;
                 }
                 break;
                 
-            case KEY_BACKSPACE:
-            case 127:
-            case 8:
-                if (pos > 0) {
-                    memmove(&text[pos-1], &text[pos], len - pos + 1);
-                    pos--;
-                    len--;
-                    modified = 1;
+            case CTRL_L:
+                dark_theme = 1 - dark_theme;
+                init_color_scheme(dark_theme);
+                show_message(dark_theme ? "Dark Theme Activated" : "Light Theme Activated", 1000);
+                break;
+                
+            case CTRL_F:
+                {
+                    echo();
+                    curs_set(1);
+                    attron(COLOR_PAIR(11) | A_BOLD);
+                    mvprintw(LINES - 1, 0, " Search: ");
+                    clrtoeol();
+                    attroff(COLOR_PAIR(11) | A_BOLD);
+                    refresh();
+                    
+                    search_term[0] = '\0';
+                    getnstr(search_term, sizeof(search_term) - 1);
+                    
+                    noecho();
+                    curs_set(1);
+                    
+                    search_highlight_pos = search_text(text, len, search_term, pos);
+                    if (search_highlight_pos != -1) {
+                        int current_pos_backup = pos;
+                        pos = search_highlight_pos; // Move cursor to highlight position for scrolling calculation
+                        
+                        // Recalculate cursor line to ensure screen scrolls to show the match
+                        int match_line = 1;
+                        for (int i = 0; i < pos; i++) {
+                            if (text[i] == '\n') match_line++;
+                        }
+                        
+                        // Force scroll_offset adjustment
+                        if (match_line < scroll_offset + 1 || match_line > scroll_offset + (LINES - 3)) {
+                            scroll_offset = match_line - (LINES - 3) / 2;
+                            if (scroll_offset < 0) scroll_offset = 0;
+                        }
+                        
+                        pos = current_pos_backup; // Restore original cursor position (if not moving)
+                        show_message("First match found (Ctrl+G to next)", 2000);
+                    } else {
+                        search_highlight_pos = -1;
+                        search_term[0] = '\0';
+                        show_message("Search term not found", 2000);
+                    }
                 }
                 break;
                 
-            case KEY_DC: // Delete klávesa
-                if (pos < len) {
-                    memmove(&text[pos], &text[pos+1], len - pos);
-                    len--;
-                    modified = 1;
+            case CTRL_G:
+                {
+                    if (search_term[0]) {
+                        int start_search_pos = search_highlight_pos + 1;
+                        if (start_search_pos > len) start_search_pos = 0;
+                        
+                        int next_match = search_text(text, len, search_term, start_search_pos);
+                        if (next_match != -1) {
+                            search_highlight_pos = next_match;
+                            int current_pos_backup = pos;
+                            pos = search_highlight_pos;
+                            
+                            int match_line = 1;
+                            for (int i = 0; i < pos; i++) {
+                                if (text[i] == '\n') match_line++;
+                            }
+                            
+                            if (match_line < scroll_offset + 1 || match_line > scroll_offset + (LINES - 3)) {
+                                scroll_offset = match_line - (LINES - 3) / 2;
+                                if (scroll_offset < 0) scroll_offset = 0;
+                            }
+                            
+                            pos = current_pos_backup;
+                            show_message("Next match found", 1000);
+                        } else {
+                            show_message("No more matches found", 2000);
+                        }
+                    }
                 }
                 break;
                 
-            case '\t':
-                for (int i = 0; i < TAB_SIZE && len < MAX_TEXT - 1; i++) {
-                    memmove(&text[pos+1], &text[pos], len - pos + 1);
-                    text[pos] = ' ';
-                    pos++;
-                    len++;
-                }
+            case CTRL_D:
+                duplicate_line(text, &len, &pos);
                 modified = 1;
                 break;
                 
-            case '\n':
-            case '\r':
-            case KEY_ENTER:
-                if (len < MAX_TEXT - 1) {
-                    memmove(&text[pos+1], &text[pos], len - pos + 1);
-                    text[pos] = '\n';
-                    pos++;
-                    len++;
-                    modified = 1;
+            case KEY_UP:
+                {
+                    if (pos == 0) break;
+                    
+                    int line_start = pos;
+                    while (line_start > 0 && text[line_start-1] != '\n') line_start--;
+                    
+                    if (line_start == 0) {
+                        pos = 0;
+                    } else {
+                        int prev_line_end = line_start - 1;
+                        int prev_line_start = prev_line_end;
+                        while (prev_line_start > 0 && text[prev_line_start-1] != '\n') prev_line_start--;
+                        
+                        int col = 0;
+                        for (int i = line_start; i < pos; i++) {
+                            if (text[i] == '\t') col += TAB_SIZE - (col % TAB_SIZE);
+                            else col++;
+                        }
+                        
+                        int prev_col = 0;
+                        int target_pos = prev_line_start;
+                        for (int i = prev_line_start; i < prev_line_end; i++) {
+                            int next_col = prev_col;
+                            if (text[i] == '\t') next_col += TAB_SIZE - (next_col % TAB_SIZE);
+                            else next_col++;
+                            
+                            if (next_col > col) break;
+                            
+                            prev_col = next_col;
+                            target_pos = i + 1;
+                        }
+                        pos = target_pos;
+                    }
+                }
+                break;
+                
+            case KEY_DOWN:
+                {
+                    int line_end = pos;
+                    while (line_end < len && text[line_end] != '\n') line_end++;
+                    
+                    if (line_end == len) break;
+                    
+                    int line_start = pos;
+                    while (line_start > 0 && text[line_start-1] != '\n') line_start--;
+                    
+                    int col = 0;
+                    for (int i = line_start; i < pos; i++) {
+                        if (text[i] == '\t') col += TAB_SIZE - (col % TAB_SIZE);
+                        else col++;
+                    }
+                    
+                    int next_line_start = line_end + 1;
+                    int next_line_end = next_line_start;
+                    while (next_line_end < len && text[next_line_end] != '\n') next_line_end++;
+                    
+                    int next_col = 0;
+                    int target_pos = next_line_start;
+                    for (int i = next_line_start; i < next_line_end; i++) {
+                        int current_col_view = next_col;
+                        if (text[i] == '\t') current_col_view += TAB_SIZE - (current_col_view % TAB_SIZE);
+                        else current_col_view++;
+                        
+                        if (current_col_view > col) break;
+                        
+                        next_col = current_col_view;
+                        target_pos = i + 1;
+                    }
+                    pos = target_pos;
                 }
                 break;
                 
@@ -613,76 +825,106 @@ int main() {
                 if (pos < len) pos++;
                 break;
                 
-            case KEY_UP:
-                {
-                    int line_start = pos;
-                    while (line_start > 0 && text[line_start-1] != '\n') line_start--;
-                    if (line_start > 0) {
-                        int prev_line_start = line_start - 1;
-                        while (prev_line_start > 0 && text[prev_line_start-1] != '\n') prev_line_start--;
-                        int offset = pos - line_start;
-                        int prev_line_end = line_start - 1;
-                        int prev_line_len = prev_line_end - prev_line_start;
-                        pos = prev_line_start + (offset > prev_line_len ? prev_line_len : offset);
-                    }
-                }
-                break;
-                
-            case KEY_DOWN:
-                {
-                    int line_start = pos;
-                    while (line_start > 0 && text[line_start-1] != '\n') line_start--;
-                    int line_end = pos;
-                    while (line_end < len && text[line_end] != '\n') line_end++;
-                    if (line_end < len) {
-                        int offset = pos - line_start;
-                        int next_line_start = line_end + 1;
-                        int next_line_end = next_line_start;
-                        while (next_line_end < len && text[next_line_end] != '\n') next_line_end++;
-                        int next_line_len = next_line_end - next_line_start;
-                        pos = next_line_start + (offset > next_line_len ? next_line_len : offset);
-                    }
-                }
-                break;
-                
             case KEY_HOME:
-                while (pos > 0 && text[pos-1] != '\n') pos--;
+                {
+                    int line_start = pos;
+                    while (line_start > 0 && text[line_start-1] != '\n') line_start--;
+                    pos = line_start;
+                }
                 break;
                 
             case KEY_END:
-                while (pos < len && text[pos] != '\n') pos++;
-                break;
-                
-            case KEY_PPAGE: // Page Up
-                scroll_offset -= visible_lines;
-                if (scroll_offset < 0) scroll_offset = 0;
-                pos = 0;
-                for (int i = 0; i < scroll_offset; i++) {
-                    while (pos < len && text[pos] != '\n') pos++;
-                    if (pos < len) pos++;
+                {
+                    int line_end = pos;
+                    while (line_end < len && text[line_end] != '\n') line_end++;
+                    pos = line_end;
                 }
                 break;
                 
-            case KEY_NPAGE: // Page Down
-                scroll_offset += visible_lines;
-                int max_scroll = count_lines(text, len) - visible_lines;
-                if (scroll_offset > max_scroll) scroll_offset = max_scroll;
-                if (scroll_offset < 0) scroll_offset = 0;
-                pos = 0;
-                for (int i = 0; i < scroll_offset; i++) {
-                    while (pos < len && text[pos] != '\n') pos++;
-                    if (pos < len) pos++;
+            case '\t':
+                if (len + TAB_SIZE < MAX_TEXT) {
+                    memmove(&text[pos + TAB_SIZE], &text[pos], len - pos + 1);
+                    for (int i = 0; i < TAB_SIZE; i++) {
+                        text[pos + i] = ' ';
+                    }
+                    pos += TAB_SIZE;
+                    len += TAB_SIZE;
+                    modified = 1;
+                }
+                break;
+                
+            case '\n':
+            case '\r':
+                {
+                    if (len < MAX_TEXT - 1) {
+                        int line_start = pos;
+                        while (line_start > 0 && text[line_start-1] != '\n') line_start--;
+                        
+                        int indentation = 0;
+                        for (int i = line_start; i < pos; i++) {
+                            if (text[i] == ' ' || text[i] == '\t') {
+                                indentation++;
+                            } else {
+                                indentation = 0;
+                            }
+                        }
+                        
+                        // Insert newline
+                        memmove(&text[pos + 1], &text[pos], len - pos + 1);
+                        text[pos] = '\n';
+                        len++;
+                        pos++;
+                        
+                        // Insert auto-indentation
+                        if (len + indentation < MAX_TEXT) {
+                            memmove(&text[pos + indentation], &text[pos], len - pos + 1);
+                            for (int i = 0; i < indentation; i++) {
+                                text[pos + i] = ' ';
+                            }
+                            pos += indentation;
+                            len += indentation;
+                        }
+                        
+                        modified = 1;
+                    }
+                }
+                break;
+                
+            case 127: // Backspace
+            case KEY_BACKSPACE:
+            case CTRL_H:
+                if (pos > 0) {
+                    if (pos >= TAB_SIZE && strncmp(&text[pos - TAB_SIZE], "    ", TAB_SIZE) == 0) {
+                         // Tab deletion (4 spaces)
+                        memmove(&text[pos - TAB_SIZE], &text[pos], len - pos + 1);
+                        pos -= TAB_SIZE;
+                        len -= TAB_SIZE;
+                    } else {
+                        // Single char deletion
+                        memmove(&text[pos - 1], &text[pos], len - pos + 1);
+                        pos--;
+                        len--;
+                    }
+                    modified = 1;
+                }
+                break;
+                
+            case KEY_DC: // Delete
+                if (pos < len) {
+                    memmove(&text[pos], &text[pos + 1], len - pos);
+                    len--;
+                    modified = 1;
                 }
                 break;
                 
             default:
-                // Běžný vstup znaků
-                if (len < MAX_TEXT - 1 && isprint(ch)) {
-                    memmove(&text[pos+1], &text[pos], len - pos + 1);
-                    text[pos] = ch;
+                if (isprint(ch) && len < MAX_TEXT - 1) {
+                    memmove(&text[pos + 1], &text[pos], len - pos + 1);
+                    text[pos] = (char)ch;
                     pos++;
                     len++;
                     modified = 1;
+                    
                 }
                 break;
         }
